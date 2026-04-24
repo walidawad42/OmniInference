@@ -1,0 +1,191 @@
+cmake_minimum_required(VERSION 3.10)
+project(OmniInference VERSION 2.0.0 LANGUAGES C CXX CUDA)
+
+# ============================================================
+# CUDA 10.1 + K5100M SPECIFIC CONFIGURATION
+# ============================================================
+
+message(STATUS "╔════════════════════════════════════════════════╗")
+message(STATUS "║ OmniInference v2.0.0 - CUDA 10.1 Build       ║")
+message(STATUS "║ Optimized for: Quadro K5100M (SM_30)         ║")
+message(STATUS "╚════════════════════════════════════════════════╝")
+
+# ============================================================
+# CUDA 10.1 DETECTION
+# ============================================================
+
+find_package(CUDAToolkit 10.1 EXACT REQUIRED)
+
+message(STATUS "[CUDA] Version: ${CUDAToolkit_VERSION}")
+message(STATUS "[CUDA] Toolkit: ${CUDAToolkit_BIN_DIR}")
+
+if(NOT CUDAToolkit_VERSION STREQUAL "10.1.243")
+    message(WARNING "[CUDA] Expected version 10.1.243, found ${CUDAToolkit_VERSION}")
+    message(WARNING "[CUDA] May work but not optimal")
+endif()
+
+# ============================================================
+# COMPILER CONFIGURATION
+# ============================================================
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+message(STATUS "[Compiler] GCC: ${CMAKE_CXX_COMPILER_VERSION}")
+
+# K5100M optimization: Use C++14 (safe for CUDA 10.1)
+if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
+    message(STATUS "[Compiler] GCC 8.x detected - applying patches")
+    
+    # GCC 8.x compatibility patches for CUDA 10.1
+    add_compile_options(-Wno-error=narrowing)
+    add_compile_options(-fno-strict-aliasing)
+    add_compile_options(-Wno-error=deprecated)
+    
+    # Kepler-friendly: disable aggressive optimizations
+    add_compile_options(-O2 -fno-tree-dce)
+else()
+    message(STATUS "[Compiler] GCC 7.x - standard mode")
+    add_compile_options(-O3)
+endif()
+
+# ============================================================
+# CUDA ARCHITECTURE: K5100M = SM_30
+# ============================================================
+
+# SM_30 (Kepler) - Primary target
+# SM_50+ - Secondary targets for compatibility
+set(CMAKE_CUDA_ARCHITECTURES 30 50 60 70 CACHE STRING "CUDA architectures")
+
+message(STATUS "[CUDA] Target architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+
+# K5100M specific CUDA flags
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --maxrregcount=128")  # Kepler register limit
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -O3")          # PTX optimization
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -dlcm=cg")    # Cache config
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math")      # Fast math
+
+# Critical for SM_30: Force compilation for Kepler
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_30,code=sm_30")
+
+# Additional architectures
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_50,code=sm_50")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_60,code=sm_60")
+
+# Verbose CUDA compilation (for debugging)
+# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -v")
+
+message(STATUS "[CUDA] Flags: ${CMAKE_CUDA_FLAGS}")
+
+# ============================================================
+# DEPENDENCIES
+# ============================================================
+
+find_package(Vulkan REQUIRED)
+find_package(SDL2 REQUIRED)
+find_package(CURL REQUIRED)
+find_package(OpenGL REQUIRED)
+
+include(FetchContent)
+
+# JSON library
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
+# ImGui
+FetchContent_Declare(ImGui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(ImGui)
+
+# ============================================================
+# CORE ENGINE
+# ============================================================
+
+add_library(OmniCore STATIC
+    src/omni_engine.cpp
+    src/memory_manager.cpp
+    src/turboquant_pipeline.cpp
+    src/turbo_quant_kernels.cu
+    src/tool_calling_interface.cpp
+    src/omni_server.cpp
+    src/monitoring.cpp
+)
+
+target_include_directories(OmniCore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${nlohmann_json_SOURCE_DIR}/include
+)
+
+target_link_libraries(OmniCore PUBLIC
+    CUDA::cudart
+    CUDA::cublas
+    ${CURL_LIBRARIES}
+    Vulkan::Vulkan
+)
+
+# K5100M specific compile flags
+target_compile_options(OmniCore PRIVATE
+    -march=native
+    -mtune=generic
+    -ffast-math
+)
+
+# ============================================================
+# GUI APPLICATION
+# ============================================================
+
+add_executable(OmniInference
+    src/gui_visual_control.cpp
+    src/gui_memory_buffer_panel.cpp
+    src/gui_integration_panel.cpp
+    src/gui_turboquant_panel.cpp
+    src/gui_monitoring_panel.cpp
+    src/main_visual.cpp
+    ${ImGui_SOURCE_DIR}/imgui.cpp
+    ${ImGui_SOURCE_DIR}/imgui_draw.cpp
+    ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
+    ${ImGui_SOURCE_DIR}/imgui_tables.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(OmniInference PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${ImGui_SOURCE_DIR}
+    ${ImGui_SOURCE_DIR}/backends
+    ${SDL2_INCLUDE_DIRS}
+)
+
+target_link_libraries(OmniInference PRIVATE
+    OmniCore
+    ${SDL2_LIBRARIES}
+    OpenGL::OpenGL
+    Vulkan::Vulkan
+)
+
+if(WIN32)
+    target_link_libraries(OmniInference PRIVATE opengl32 gdi32 ws2_32)
+endif()
+
+# ============================================================
+# BUILD INFO
+# ============================================================
+
+message(STATUS "")
+message(STATUS "Build Configuration Summary:")
+message(STATUS "  CUDA: ${CUDAToolkit_VERSION}")
+message(STATUS "  Primary GPU: Quadro K5100M (SM_30)")
+message(STATUS "  GCC: ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "  C++ Standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "  Configuration: Release/Debug")
+message(STATUS "")
+message(STATUS "To build:")
+message(STATUS "  mkdir build && cd build")
+message(STATUS "  cmake -DCMAKE_BUILD_TYPE=Release ..")
+message(STATUS "  make -j$(nproc)")
+message(STATUS "")

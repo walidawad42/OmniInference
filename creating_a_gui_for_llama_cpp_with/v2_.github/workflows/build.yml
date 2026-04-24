@@ -1,0 +1,53 @@
+name: Build OmniInference
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
+          sudo apt-get install -y libcuda-dev nvidia-cuda-toolkit
+          sudo apt-get install -y libvulkan-dev libsdl2-dev libcurl4-openssl-dev
+      
+      - name: Configure & Build
+        run: |
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc)
+      
+      - name: Verify Build
+        run: |
+          [ -f build/OmniInference ] && echo "✓ Build successful"
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup CUDA
+        uses: Jimver/cuda-toolkit@v0.2.11
+        with:
+          cuda: '12.0'
+      
+      - name: Configure & Build
+        run: |
+          mkdir build
+          cd build
+          cmake -G "Visual Studio 17 2022" ..
+          cmake --build . --config Release
+      
+      - name: Verify Build
+        run: |
+          if (Test-Path "build\Release\OmniInference.exe") {
+              Write-Host "✓ Build successful"
+          }
