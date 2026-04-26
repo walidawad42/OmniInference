@@ -1,1 +1,0 @@
-This file implements the TurboQuant Plus logic (PolarQuant + QJL) optimized for SM_30 (Kepler). Kepler lacks FP16 native compute throughput in some areas, so we stick to FP32 compute with INT storage.
