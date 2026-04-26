@@ -1,0 +1,55 @@
+cmake_minimum_required(VERSION 3.20)
+project(OmniInference VERSION 2.0.0 LANGUAGES C CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ===== DEPENDENCIES =====
+find_package(CUDAToolkit 11.4 REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(SDL2 REQUIRED)
+find_package(OpenGL REQUIRED)
+
+include(FetchContent)
+
+FetchContent_Declare(ImGui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(ImGui)
+
+# ===== CORE ENGINE =====
+add_library(OmniCore STATIC
+    src/omni_engine.cpp
+)
+
+target_include_directories(OmniCore PUBLIC include)
+target_link_libraries(OmniCore PUBLIC CUDA::cudart)
+
+# ===== GUI APPLICATION =====
+add_executable(OmniInference
+    src/gui_visual_control.cpp
+    src/main_visual.cpp
+    ${ImGui_SOURCE_DIR}/imgui.cpp
+    ${ImGui_SOURCE_DIR}/imgui_draw.cpp
+    ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
+    ${ImGui_SOURCE_DIR}/imgui_tables.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(OmniInference PRIVATE
+    include
+    ${ImGui_SOURCE_DIR}
+    ${ImGui_SOURCE_DIR}/backends
+    ${SDL2_INCLUDE_DIRS}
+)
+
+target_link_libraries(OmniInference PRIVATE
+    OmniCore
+    ${SDL2_LIBRARIES}
+    OpenGL::OpenGL
+    Vulkan::Vulkan
+)
+
+install(TARGETS OmniInference RUNTIME DESTINATION bin)
