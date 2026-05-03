@@ -100,6 +100,6 @@ private:
     std::string server_process_id_;
     bool is_connected_ = false;
 
-    std::string MakeRequest(const std::string& endpoint, const std::string& method, const json& data = json());
+    std::string MakeRequest(const std::string& server_url, const std::string& endpoint, const std::string& method, const json& data = json());
     json ParseResponse(const std::string& response);
 };

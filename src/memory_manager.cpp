@@ -1,13 +1,16 @@
 #include "memory_manager.h"
-#include <iostream>
-#include <cmath>
+
 #include <algorithm>
+#include <cerrno>
+#include <cmath>
+#include <iostream>
 
 #ifdef _WIN32
     #include <windows.h>
 #else
-    #include <unistd.h>
+    #include <sys/stat.h>   // mkdir
     #include <sys/sysinfo.h>
+    #include <unistd.h>
 #endif
 
 MemoryManager::MemoryManager() {
@@ -63,8 +66,16 @@ void MemoryManager::SetPolicy(const MemoryPolicy& policy) {
 }
 
 uint64_t MemoryManager::GetUsableVRAM() const {
-    uint64_t usable = total_vram_bytes_ - reserved_buffer_bytes_ - allocated_vram_bytes_;
-    return std::max(0UL, usable);
+    // `total_vram_bytes_` and the values being subtracted are unsigned, so the
+    // previous `total_vram_bytes_ - reserved_buffer_bytes_ - allocated_vram_bytes_`
+    // would silently underflow when more VRAM was reserved + allocated than is
+    // physically present (e.g. CPU-only builds where total VRAM is 0). Guard
+    // explicitly and return 0 in that case.
+    const uint64_t reserved = reserved_buffer_bytes_ + allocated_vram_bytes_;
+    if (total_vram_bytes_ <= reserved) {
+        return 0;
+    }
+    return total_vram_bytes_ - reserved;
 }
 
 bool MemoryManager::AllocateVRAM(const std::string& allocation_id, uint64_t size, const std::string& purpose) {

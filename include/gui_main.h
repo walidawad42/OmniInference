@@ -4,6 +4,8 @@
 #include "gui_node_editor.h"
 #include <SDL2/SDL.h>
 #include <imgui.h>
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,10 @@ private:
     OmniEngine engine_;
     GUINodeEditor node_editor_;
     ImGuiIO* io_ = nullptr;
+
+    // Loop control + synchronisation for output produced by background threads.
+    std::atomic<bool> running_{false};
+    mutable std::mutex output_mutex_;
 
     // UI State
     bool show_hardware_info_ = false;

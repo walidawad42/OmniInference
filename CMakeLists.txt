@@ -43,29 +43,24 @@ set(CMAKE_CUDA_ARCHITECTURES 30 50 60 70 75 80 86 89 90
 
 message(STATUS "[CUDA] Compiling for architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
-# CUDA-specific flags
+# CUDA-specific flags. The -gencode flags previously set here duplicated
+# CMAKE_CUDA_ARCHITECTURES, which CMake already translates into the right
+# -gencode arguments for nvcc, so we omit them and let CMake handle it.
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -O3")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -lineinfo")
-
-# Kepler-specific optimizations
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_30,code=sm_30")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_50,code=sm_50")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_60,code=sm_60")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_70,code=sm_70")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_75,code=sm_75")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_80,code=sm_80")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_86,code=sm_86")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_89,code=sm_89")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_90,code=sm_90")
 
 # ============================================================
 # DEPENDENCIES
 # ============================================================
 
-find_package(Vulkan REQUIRED)
+find_package(Vulkan)
 find_package(SDL2 REQUIRED)
-find_package(OpenGL REQUIRED)
+find_package(OpenGL)
 find_package(CURL REQUIRED)
+
+if(Vulkan_FOUND)
+    add_compile_definitions(OMNI_HAVE_VULKAN)
+endif()
 
 include(FetchContent)
 
@@ -79,6 +74,11 @@ FetchContent_Declare(ImGui
     GIT_TAG master
 )
 
+# Note: TurboQuant Plus was previously fetched from an external GitHub
+# repository that no longer exists. The TurboQuant pipeline implementation
+# now lives directly in src/turboquant_pipeline.cpp and src/turbo_quant_kernels.cu
+# and is built as part of OmniCore below, so no FetchContent declaration is
+# required for it.
 FetchContent_MakeAvailable(json ImGui)
 
 # ============================================================
@@ -118,6 +118,11 @@ add_library(OmniCore STATIC
     src/dify_integration.cpp
     src/rag_integration.cpp
     src/turboquant_pipeline.cpp
+    src/turbo_quant_kernels.cu
+    src/memory_manager.cpp
+    src/monitoring.cpp
+    src/markdown_exporter.cpp
+    src/omni_server.cpp
 )
 
 target_include_directories(OmniCore PUBLIC
@@ -131,8 +136,11 @@ target_link_libraries(OmniCore PUBLIC
     CUDA::cublas
     CUDA::cublasLt
     ${CURL_LIBRARIES}
-    Vulkan::Vulkan
 )
+
+if(Vulkan_FOUND)
+    target_link_libraries(OmniCore PUBLIC Vulkan::Vulkan)
+endif()
 
 target_compile_definitions(OmniCore PRIVATE
     TURBOQUANT_PLUS_ENABLED
@@ -150,22 +158,21 @@ add_executable(OmniInference
     src/gui_visual_control.cpp
     src/gui_integration_panel.cpp
     src/gui_turboquant_panel.cpp
-    src/omni_server.cpp
-    src/monitoring.cpp
+    src/gui_memory_buffer_panel.cpp
     src/main_visual.cpp
-    ${ImGui_SOURCE_DIR}/imgui.cpp
-    ${ImGui_SOURCE_DIR}/imgui_draw.cpp
-    ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
-    ${ImGui_SOURCE_DIR}/imgui_tables.cpp
-    ${ImGui_SOURCE_DIR}/imgui_demo.cpp
-    ${ImGui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
-    ${ImGui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
 target_include_directories(OmniInference PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${ImGui_SOURCE_DIR}
-    ${ImGui_SOURCE_DIR}/backends
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
     ${SDL2_INCLUDE_DIRS}
     ${nlohmann_json_SOURCE_DIR}/include
 )
@@ -173,12 +180,19 @@ target_include_directories(OmniInference PRIVATE
 target_link_libraries(OmniInference PRIVATE
     OmniCore
     ${SDL2_LIBRARIES}
-    OpenGL::OpenGL
-    Vulkan::Vulkan
 )
 
+if(OPENGL_FOUND)
+    target_link_libraries(OmniInference PRIVATE OpenGL::GL)
+endif()
+if(Vulkan_FOUND)
+    target_link_libraries(OmniInference PRIVATE Vulkan::Vulkan)
+endif()
+
 if(WIN32)
-    target_link_libraries(OmniInference PRIVATE opengl32 gdi32 ws2_32)
+    # DXGI / D3D11 are only available on Windows; the Linux path uses the
+    # Vulkan / NVML / CUDA fallbacks compiled into OmniCore.
+    target_link_libraries(OmniInference PRIVATE opengl32 gdi32 ws2_32 d3d11 dxgi d3dcompiler)
 endif()
 
 # ============================================================

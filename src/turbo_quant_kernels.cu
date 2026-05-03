@@ -104,22 +104,33 @@ extern "C" __global__ void kernel_turbo_quant_kv(
     }
 }
 
-// C++ Interface for omni_engine.cpp
-extern "C" void launch_turbo_quant_kv(void* kv_data, void* quantized_data, int n_tokens, int n_embd, int n_layers, cudaStream_t stream) {
+// C++ Interface for omni_engine.cpp.
+//
+// Previously this wrapper accepted a single `quantized_data` pointer and
+// passed seven arguments to a six-parameter kernel, which fails to compile.
+// The wrapper now takes one pointer per output buffer (dst_k, dst_v,
+// qjl_residual) so the argument count and types match the kernel signature.
+extern "C" void launch_turbo_quant_kv(
+    const void* src_kv,
+    void* dst_k,
+    void* dst_v,
+    void* qjl_residual,
+    int n_tokens,
+    int n_embd,
+    int n_layers,
+    cudaStream_t stream)
+{
     int threads_per_block = 256; // Optimized for Kepler Warp Size (32) but memory bound
     int blocks = n_tokens * n_layers; // Launch one block per token-layer pair
-    
-    // Launch configuration
+
     kernel_turbo_quant_kv<<<blocks, threads_per_block, 0, stream>>>(
-        (float*)kv_data, 
-        (uint8_t*)quantized_data, // Simplified arg mapping
-        nullptr, // K ptr
-        nullptr, // V ptr
-        nullptr, // Residual ptr
-        n_tokens, 
-        n_embd
-    );
-    
+        static_cast<const float*>(src_kv),
+        static_cast<uint8_t*>(dst_k),
+        static_cast<uint8_t*>(dst_v),
+        static_cast<float*>(qjl_residual),
+        n_tokens,
+        n_embd);
+
     // Check for launch errors
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {

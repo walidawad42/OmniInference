@@ -1,11 +1,18 @@
 #include "gui_app.h"
-#include <iostream>
+
 #include <filesystem>
-#include <thread>
 #include <fstream>
+#include <iostream>
+#include <mutex>
 #include <sstream>
+#include <thread>
 
 namespace fs = std::filesystem;
+
+namespace {
+constexpr int kBackgroundQuantKeyBits = 4;
+constexpr int kBackgroundQuantValueBits = 2;
+} // namespace
 
 GUIApp::GUIApp() = default;
 
@@ -47,8 +54,8 @@ bool GUIApp::Initialize(int width, int height) {
         return false;
     }
     
-    // Initialize Hardware
-    if (!engine_.InitializeHardware()) {
+    // Initialize backend (uses the engine's HardwareBackend detection)
+    if (!engine_.InitializeBackend()) {
         std::cerr << "Hardware Initialization Failed" << std::endl;
         return false;
     }
@@ -65,9 +72,9 @@ bool GUIApp::Initialize(int width, int height) {
 }
 
 void GUIApp::Run() {
-    bool running = true;
-    
-    while (running) {
+    running_.store(true);
+
+    while (running_.load()) {
         HandleEvents();
         Render();
         SDL_Delay(16); // ~60 FPS
@@ -88,7 +95,7 @@ void GUIApp::HandleEvents() {
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
             case SDL_QUIT:
-                exit(0);
+                running_.store(false);
                 break;
             case SDL_MOUSEBUTTONDOWN:
             case SDL_MOUSEBUTTONUP:
@@ -96,6 +103,8 @@ void GUIApp::HandleEvents() {
             case SDL_KEYUP:
             case SDL_TEXTINPUT:
                 HandleInput(event);
+                break;
+            default:
                 break;
         }
     }
@@ -132,7 +141,8 @@ void GUIApp::HandleInput(const SDL_Event& event) {
             input_prompt_.pop_back();
         }
         
-        if (event.key.keysym.sym == SDLK_RETURN && current_model_ && current_model_->loaded) {
+        if (event.key.keysym.sym == SDLK_RETURN && current_model_index_ >= 0 &&
+            available_models_[current_model_index_].loaded) {
             GenerateResponse();
         }
     }
@@ -171,10 +181,16 @@ void GUIApp::RenderTopBar() {
     DrawText(15, 15, "OmniInference", {255, 255, 255, 255});
     
     // Model Status
-    std::string model_status = current_model_ 
-        ? current_model_->name + (current_model_->loaded ? " [LOADED]" : " [Ready]")
+    const ModelEntry* current_model = (current_model_index_ >= 0 &&
+                                       current_model_index_ < static_cast<int>(available_models_.size()))
+                                          ? &available_models_[current_model_index_]
+                                          : nullptr;
+    std::string model_status = current_model
+        ? current_model->name + (current_model->loaded ? " [LOADED]" : " [Ready]")
         : "[No Model]";
-    DrawText(300, 15, model_status, current_model_ && current_model_->loaded ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 200, 0, 255});
+    DrawText(300, 15, model_status, current_model && current_model->loaded
+                                        ? SDL_Color{0, 255, 0, 255}
+                                        : SDL_Color{255, 200, 0, 255});
     
     // Button: Model Browser
     DrawButton(window_width_ - 240, 10, 100, 40, "Models", false);
@@ -223,8 +239,13 @@ void GUIApp::RenderOutputDisplay() {
     SDL_SetRenderDrawColor(renderer_, 100, 100, 150, 255);
     SDL_RenderDrawRect(renderer_, &output_box);
     
-    // Draw Output Text
-    DrawText(25, y_start + 35, output_text_, {200, 255, 200, 255});
+    // Draw Output Text (lock so we don't read mid-update from generation thread)
+    std::string output_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        output_snapshot = output_text_;
+    }
+    DrawText(25, y_start + 35, output_snapshot, {200, 255, 200, 255});
 }
 
 void GUIApp::RenderStatusBar() {
@@ -236,11 +257,16 @@ void GUIApp::RenderStatusBar() {
     
     // Status Message
     SDL_Color status_color = {150, 200, 150, 255};
-    if (state_ == GUIState::ERROR) {
+    if (state_.load() == GUIState::ERROR) {
         status_color = {255, 100, 100, 255};
     }
-    
-    DrawText(15, y_pos + 10, status_message_, status_color);
+
+    std::string status_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        status_snapshot = status_message_;
+    }
+    DrawText(15, y_pos + 10, status_snapshot, status_color);
 }
 
 void GUIApp::RenderSettingsPanel() {
@@ -322,9 +348,13 @@ void GUIApp::RenderModelBrowser() {
     
     for (size_t i = 0; i < available_models_.size() && i < 10; ++i) {
         const auto& model = available_models_[i];
-        
-        // Model Item Background
-        SDL_SetRenderDrawColor(renderer_, model.loaded ? 80, 100, 80 : 60, 60, 80, 255);
+
+        // Model Item Background (use a clear if/else; the previous ternary was malformed)
+        if (model.loaded) {
+            SDL_SetRenderDrawColor(renderer_, 80, 100, 80, 255);
+        } else {
+            SDL_SetRenderDrawColor(renderer_, 60, 60, 80, 255);
+        }
         SDL_Rect item_rect = {panel_x + 10, y_offset, panel_width - 20, model_height};
         SDL_RenderFillRect(renderer_, &item_rect);
         
@@ -373,70 +403,101 @@ void GUIApp::ScanModelDirectory() {
 }
 
 void GUIApp::LoadModel(const std::string& model_path) {
-    state_ = GUIState::LOADING_MODEL;
-    status_message_ = "Loading model...";
-    
+    state_.store(GUIState::LOADING_MODEL);
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        status_message_ = "Loading model...";
+    }
+
     TurboQuantConfig quant_cfg;
     quant_cfg.use_polar_transform = true;
-    quant_cfg.key_bits = 4;
-    quant_cfg.value_bits = 2;
-    
-    if (engine_.LoadModel(model_path, quant_cfg)) {
-        state_ = GUIState::IDLE;
+    quant_cfg.key_bits = kBackgroundQuantKeyBits;
+    quant_cfg.value_bits = kBackgroundQuantValueBits;
+
+    // The new OmniEngine API takes a ModelParameters struct rather than a raw path.
+    ModelParameters params;
+    params.model_path = model_path;
+    params.model_name = fs::path(model_path).filename().string();
+    params.n_ctx = settings_.n_ctx;
+    params.n_batch = settings_.n_batch;
+    params.n_gpu_layers = settings_.use_gpu ? settings_.n_gpu_layers : 0;
+
+    if (engine_.LoadModel(params, quant_cfg)) {
+        state_.store(GUIState::IDLE);
+        std::lock_guard<std::mutex> lock(output_mutex_);
         status_message_ = "Model loaded successfully.";
-        
-        // Find and mark as loaded
-        for (auto& model : available_models_) {
-            if (model.path == model_path) {
-                model.loaded = true;
-                current_model_ = &model;
+
+        // Find and mark as loaded; store an index instead of a pointer that
+        // can dangle when the vector is resized.
+        for (size_t i = 0; i < available_models_.size(); ++i) {
+            if (available_models_[i].path == model_path) {
+                available_models_[i].loaded = true;
+                current_model_index_ = static_cast<int>(i);
                 break;
             }
         }
     } else {
-        state_ = GUIState::ERROR;
+        state_.store(GUIState::ERROR);
+        std::lock_guard<std::mutex> lock(output_mutex_);
         status_message_ = "Failed to load model.";
     }
 }
 
 void GUIApp::UnloadModel() {
-    if (current_model_) {
-        current_model_->loaded = false;
-        current_model_ = nullptr;
+    if (current_model_index_ >= 0 &&
+        current_model_index_ < static_cast<int>(available_models_.size())) {
+        available_models_[current_model_index_].loaded = false;
     }
+    current_model_index_ = -1;
     engine_.UnloadModel();
+    std::lock_guard<std::mutex> lock(output_mutex_);
     status_message_ = "Model unloaded.";
 }
 
 void GUIApp::GenerateResponse() {
-    if (!current_model_ || !current_model_->loaded) {
+    if (current_model_index_ < 0 ||
+        current_model_index_ >= static_cast<int>(available_models_.size()) ||
+        !available_models_[current_model_index_].loaded) {
+        std::lock_guard<std::mutex> lock(output_mutex_);
         status_message_ = "No model loaded.";
         return;
     }
-    
-    state_ = GUIState::GENERATING;
-    status_message_ = "Generating response...";
-    output_text_.clear();
-    
+
+    state_.store(GUIState::GENERATING);
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        status_message_ = "Generating response...";
+        output_text_.clear();
+    }
+
+    // Snapshot inputs needed by the generation thread to avoid races on the
+    // members owned by the GUI/main thread.
+    const std::string prompt_snapshot = input_prompt_;
+    GenerationConfig gen_cfg;
+    gen_cfg.temperature = settings_.temperature;
+    gen_cfg.top_p = settings_.top_p;
+    gen_cfg.max_tokens = settings_.max_tokens;
+
     // Run generation in background thread
-    std::thread gen_thread([this]() {
-        output_text_ = engine_.Generate(
-            input_prompt_,
-            settings_.temperature,
-            settings_.top_p,
-            settings_.max_tokens,
+    std::thread gen_thread([this, prompt_snapshot, gen_cfg]() {
+        std::string result = engine_.Generate(
+            prompt_snapshot,
+            gen_cfg,
             [this](const std::string& token) {
                 OnTokenGenerated(token);
             }
         );
-        state_ = GUIState::IDLE;
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        output_text_ = std::move(result);
+        state_.store(GUIState::IDLE);
         status_message_ = "Generation complete.";
     });
-    
+
     gen_thread.detach();
 }
 
 void GUIApp::OnTokenGenerated(const std::string& token) {
+    std::lock_guard<std::mutex> lock(output_mutex_);
     output_text_ += token;
 }
 

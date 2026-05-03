@@ -1,15 +1,21 @@
 #pragma once
 
-#include <string>
-#include <vector>
-#include <memory>
+#include <cstdint>
 #include <functional>
 #include <map>
-#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
-// Forward declarations
-struct cudaStream_t;
-struct VkDevice_T;
+// CUDA / Vulkan handles are intentionally opaque at the public API level.
+// The previous `struct cudaStream_t` / `struct VkDevice_T` forward declarations
+// were incorrect (the real types are typedefs / pointers, not structs) and
+// would not match a real CUDA / Vulkan header if anyone ever included one. We
+// simply expose them as opaque `void*`-typedef'd handles here. Translation
+// units that actually need the typed handles include the real CUDA / Vulkan
+// headers themselves and convert as needed.
+using OmniCudaStreamHandle = void*;
+using OmniVkDeviceHandle = void*;
 
 enum class HardwareBackend {
     NVIDIA_CUDA,
@@ -116,7 +122,7 @@ public:
     // Quantization Control
     bool ApplyQuantization(const TurboQuantConfig& config);
     TurboQuantConfig GetCurrentQuantConfig() const { return active_quant_cfg_; }
-    bool ValidateQuantizationFit(const ModelParameters& params, const TurboQuantConfig& config);
+    bool ValidateQuantizationFit(const ModelParameters& params, const TurboQuantConfig& config) const;
 
     // Generation
     std::string Generate(

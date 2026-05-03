@@ -1,11 +1,41 @@
 #include "gui_main.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl3.h"
-#include <iostream>
+
+#include <cstring>
 #include <filesystem>
+#include <iostream>
+#include <mutex>
 #include <thread>
 
 namespace fs = std::filesystem;
+
+namespace {
+// Append `addition` to `dst` (a fixed-size char buffer) without overflowing,
+// always leaving a NUL terminator. Returns true if the full text fit.
+bool SafeAppend(char* dst, size_t dst_capacity, const char* addition) {
+    if (!dst || dst_capacity == 0 || !addition) return false;
+    size_t cur_len = std::strlen(dst);
+    if (cur_len >= dst_capacity - 1) return false;
+    size_t remaining = dst_capacity - cur_len - 1;
+    size_t add_len = std::strlen(addition);
+    size_t to_copy = std::min(add_len, remaining);
+    std::memcpy(dst + cur_len, addition, to_copy);
+    dst[cur_len + to_copy] = '\0';
+    return to_copy == add_len;
+}
+
+void SafeAssign(char* dst, size_t dst_capacity, const char* src) {
+    if (!dst || dst_capacity == 0) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    size_t copy = std::min(std::strlen(src), dst_capacity - 1);
+    std::memcpy(dst, src, copy);
+    dst[copy] = '\0';
+}
+} // namespace
 
 GUIMainWindow::GUIMainWindow() {
     ui_model_params_.n_embd = 4096;
@@ -93,21 +123,23 @@ bool GUIMainWindow::Initialize(int width, int height) {
 }
 
 void GUIMainWindow::Run() {
-    bool running = true;
+    running_.store(true);
 
-    while (running) {
+    while (running_.load()) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
 
             switch (event.type) {
                 case SDL_QUIT:
-                    running = false;
+                    running_.store(false);
                     break;
                 case SDL_KEYDOWN:
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
-                        running = false;
+                        running_.store(false);
                     }
+                    break;
+                default:
                     break;
             }
         }
@@ -149,7 +181,7 @@ void GUIMainWindow::RenderMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Exit", "ESC")) {
-                exit(0);
+                running_.store(false);
             }
             ImGui::EndMenu();
         }
@@ -365,19 +397,30 @@ void GUIMainWindow::LoadSelectedModel() {
 
 void GUIMainWindow::ExecuteGeneration() {
     if (!engine_.IsModelLoaded()) {
-        strcpy_s(output_buffer_, "ERROR: No model loaded");
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        SafeAssign(output_buffer_, sizeof(output_buffer_), "ERROR: No model loaded");
         return;
     }
 
-    std::thread gen_thread([this]() {
+    // Snapshot the inputs the worker thread needs to avoid races.
+    const std::string prompt_snapshot(input_prompt_);
+    const GenerationConfig gen_cfg = ui_gen_config_;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        output_buffer_[0] = '\0';
+    }
+
+    std::thread gen_thread([this, prompt_snapshot, gen_cfg]() {
         std::string result = engine_.Generate(
-            input_prompt_,
-            ui_gen_config_,
+            prompt_snapshot,
+            gen_cfg,
             [this](const std::string& token) {
-                strcat_s(output_buffer_, token.c_str());
+                std::lock_guard<std::mutex> lock(output_mutex_);
+                SafeAppend(output_buffer_, sizeof(output_buffer_), token.c_str());
             }
         );
-        strcpy_s(output_buffer_, result.c_str());
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        SafeAssign(output_buffer_, sizeof(output_buffer_), result.c_str());
     });
     gen_thread.detach();
 }

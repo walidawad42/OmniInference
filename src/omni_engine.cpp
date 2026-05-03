@@ -1,43 +1,38 @@
 #include "omni_engine.h"
-#include <iostream>
-#include <cmath>
-#include <algorithm>
 
-// CUDA Headers (11.4+)
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+
+// CUDA headers are only meaningful when this TU is compiled by nvcc. The
+// rest of the engine treats CUDA as opaque and gracefully degrades to a CPU
+// path on hosts without CUDA.
 #ifdef __CUDACC__
     #include <cuda_runtime.h>
     #include <cublas_v2.h>
     #include <cuda.h>
 #endif
 
-// Vulkan Headers
-#include <vulkan/vulkan.h>
+// Vulkan is optional at compile time; only include the header if a Vulkan SDK
+// is actually available. Define `OMNI_HAVE_VULKAN` from the build system to
+// enable real Vulkan initialisation.
+#ifdef OMNI_HAVE_VULKAN
+    #include <vulkan/vulkan.h>
+#endif
 
-// TurboQuant Plus Headers
-#include "turboquant_plus.h"
-
-extern "C" {
-    void launch_turbo_quant_kv_polar(
-        void* kv_data,
-        void* quantized_data,
-        int n_tokens,
-        int n_embd,
-        int n_layers,
-        int key_bits,
-        int value_bits,
-        void* stream
-    );
-    
-    void launch_turbo_quant_dequantize(
-        void* quantized_data,
-        void* output_data,
-        int n_tokens,
-        int n_embd,
-        int key_bits,
-        int value_bits,
-        void* stream
-    );
-}
+// TurboQuant Plus was previously fetched as an external dependency; the repo
+// referenced no longer exists. The wrapper kernel `launch_turbo_quant_kv` is
+// now provided in-tree by `turbo_quant_kernels.cu` and used directly when
+// CUDA is available.
+extern "C" void launch_turbo_quant_kv(
+    const void* src_kv,
+    void* dst_k,
+    void* dst_v,
+    void* qjl_residual,
+    int n_tokens,
+    int n_embd,
+    int n_layers,
+    void* stream);
 
 OmniEngine::OmniEngine() = default;
 
@@ -84,17 +79,19 @@ HardwareProfile OmniEngine::DetectHardware() {
     }
     #endif
     
-    // Fallback to Vulkan for AMD/Intel
+    // Fallback to Vulkan for AMD/Intel when the SDK is available at build time.
+#ifdef OMNI_HAVE_VULKAN
     uint32_t instance_count = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &instance_count, nullptr);
-    
+
     if (instance_count > 0) {
-        profile.backend = HardwareBackend::AMD_VULKAN; // Default to AMD, can detect via device name
+        profile.backend = HardwareBackend::AMD_VULKAN; // Default to AMD; refine via device name
         profile.device_name = "Vulkan Device (AMD/Intel)";
         profile.supports_rope_freq_scaling = true;
         // Additional Vulkan device detection would go here
         return profile;
     }
+#endif
     
     profile.backend = HardwareBackend::CPU_FALLBACK;
     profile.device_name = "CPU Fallback";
@@ -146,15 +143,19 @@ void OmniEngine::InitializeCUDABackend() {
 }
 
 void OmniEngine::InitializeVulkanBackend() {
-    // Vulkan initialization code
+#ifdef OMNI_HAVE_VULKAN
     VkApplicationInfo app_info{};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app_info.pApplicationName = "OmniInference";
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.apiVersion = VK_API_VERSION_1_2;
-    
-    // Create instance, device, etc.
+
+    // Real device / instance creation would go here.
     std::cout << "[OmniEngine] Vulkan backend initialized" << std::endl;
+#else
+    std::cout << "[OmniEngine] Vulkan support not compiled in (define OMNI_HAVE_VULKAN to enable)"
+              << std::endl;
+#endif
 }
 
 bool OmniEngine::LoadModel(const ModelParameters& params, const TurboQuantConfig& quant_cfg) {
@@ -244,9 +245,11 @@ bool OmniEngine::ApplyQuantization(const TurboQuantConfig& config) {
     std::cout << "  - Key Precision: " << config.key_bits << "-bit" << std::endl;
     std::cout << "  - Value Precision: " << config.value_bits << "-bit" << std::endl;
     
-    // Call TurboQuant Plus kernels
+    // Call TurboQuant Plus kernels. The actual launch is wired up at the
+    // pipeline layer where the K/V tensors live; this method just records the
+    // active config so subsequent generation steps pick it up.
     if (active_backend_ == HardwareBackend::NVIDIA_CUDA) {
-        // launch_turbo_quant_kv_polar(...);
+        // launch_turbo_quant_kv(src_kv, dst_k, dst_v, residual, ...);
     }
     
     return true;
