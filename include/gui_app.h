@@ -2,9 +2,11 @@
 
 #include "omni_engine.h"
 #include <SDL2/SDL.h>
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <memory>
 
 enum class GUIState {
     IDLE,
@@ -53,18 +55,22 @@ private:
     int window_height_ = 720;
     
     // State
-    GUIState state_ = GUIState::IDLE;
+    std::atomic<GUIState> state_{GUIState::IDLE};
+    std::atomic<bool> running_{false};
     OmniEngine engine_;
     GUISettings settings_;
     std::vector<ModelEntry> available_models_;
-    ModelEntry* current_model_ = nullptr;
-    
+    int current_model_index_ = -1; // index into available_models_; -1 = none
+
     // GUI Components State
     std::string input_prompt_;
     std::string output_text_;
     std::string status_message_;
     bool show_settings_panel_ = false;
     bool show_model_browser_ = false;
+
+    // Synchronisation for fields touched by the generation thread
+    mutable std::mutex output_mutex_;
     
     // Event Handling
     void HandleEvents();

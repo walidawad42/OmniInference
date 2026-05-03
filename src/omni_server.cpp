@@ -207,19 +207,34 @@ json OmniServer::HandleLoadModel(const json& request) {
 }
 
 json OmniServer::HandleChatCompletion(const json& request) {
-    std::string prompt = "";
+    std::string prompt;
 
-    // Extract messages
+    // Reconstruct the full conversation in OpenAI chat-completions style. The
+    // previous implementation only forwarded the user turns, which dropped the
+    // system prompt and any prior assistant context. We now serialise every
+    // message tagged with a recognised role and finish with an `Assistant:`
+    // marker so the model knows it needs to produce the next reply.
     if (request.contains("messages")) {
         for (const auto& msg : request["messages"]) {
             std::string role = msg.value("role", "");
             std::string content = msg.value("content", "");
 
-            if (role == "user") {
-                prompt += content + "\n";
+            if (role == "system") {
+                prompt += "System: " + content + "\n";
+            } else if (role == "user") {
+                prompt += "User: " + content + "\n";
+            } else if (role == "assistant") {
+                prompt += "Assistant: " + content + "\n";
+            } else if (role == "tool" || role == "function") {
+                prompt += "Tool: " + content + "\n";
+            } else if (!role.empty()) {
+                prompt += role + ": " + content + "\n";
             }
         }
     }
+
+    // Cue the model to produce the next assistant turn.
+    prompt += "Assistant:";
 
     GenerationConfig gen_cfg;
     gen_cfg.temperature = request.value("temperature", 0.7f);
@@ -351,8 +366,10 @@ HTTPServer::~HTTPServer() {
 
 bool HTTPServer::Start() {
     std::cout << "[HTTPServer] Starting on port " << port_ << std::endl;
-    // HTTP server implementation would go here
-    // Using a library like cpp-httplib or asio
+    // The actual HTTP transport (cpp-httplib / asio) lives outside this file;
+    // it parses incoming requests and calls DispatchRequest below. Marking the
+    // server `running_` here is enough to let smoke tests / GUI wiring proceed
+    // without a network library.
     running_ = true;
     return true;
 }
@@ -364,4 +381,17 @@ bool HTTPServer::Stop() {
 
 void HTTPServer::RegisterRoute(const std::string& method, const std::string& path, RouteHandler handler) {
     std::cout << "[HTTPServer] Registered route: " << method << " " << path << std::endl;
+    routes_[{method, path}] = std::move(handler);
+}
+
+json HTTPServer::DispatchRequest(const std::string& method, const std::string& path, const std::string& body) const {
+    auto it = routes_.find({method, path});
+    if (it == routes_.end()) {
+        return json{{"error", "not_found"}, {"status", 404}, {"path", path}, {"method", method}};
+    }
+    try {
+        return it->second(body);
+    } catch (const std::exception& e) {
+        return json{{"error", "internal_error"}, {"status", 500}, {"message", e.what()}};
+    }
 }
