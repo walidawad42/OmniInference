@@ -71,6 +71,17 @@ assert_json_truthy() {
     fi
 }
 
+# Assert that the JSON-decoded string at $2 contains the substring $3.
+assert_contains() {
+    local label="$1" expr="$2" needle="$3" raw="$4" actual
+    actual="$(python3 -c "import sys, json; data=json.load(sys.stdin); print(${expr})" <<<"${raw}")"
+    if [[ "${actual}" == *"${needle}"* ]]; then
+        ok "${label}"
+    else
+        fail "${label}" "needle '${needle}' not in '${actual}' (raw: ${raw})"
+    fi
+}
+
 require_bin() {
     if ! command -v "$1" >/dev/null 2>&1; then
         echo "tests/api: missing required binary '$1'" >&2
@@ -239,6 +250,124 @@ assert_json_eq "first block type=tool_use" \
                 "tool_use" "${RESP}"
 assert_json_eq "tool_use name"          "[b['name'] for b in data['content'] if b['type']=='tool_use'][0]" \
                 "do_thing" "${RESP}"
+
+#############################################################################
+# Stage B: vision input via image_url content blocks. The server decodes
+# every base64 / data: URI image attached to the request via stb_image and
+# the MockEngine surfaces width x height + media type back in its response.
+# 1x1 transparent PNG, hand-crafted so the test stays self-contained.
+TINY_PNG_B64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII='
+
+echo "=== POST /v1/chat/completions (OpenAI image_url) ==="
+RESP="$(curl -fsS -X POST "${BASE_URL}/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "$(python3 -c "
+import json, sys
+url = 'data:image/png;base64,${TINY_PNG_B64}'
+print(json.dumps({
+    'model': 'omni-mock',
+    'messages': [{
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'describe this'},
+            {'type': 'image_url', 'image_url': {'url': url}},
+        ],
+    }],
+}))
+")")"
+assert_contains "OpenAI image: response mentions 1 image" \
+    "data['choices'][0]['message']['content']" "1 image" "${RESP}"
+assert_contains "OpenAI image: response mentions image dimensions" \
+    "data['choices'][0]['message']['content']" "1x1" "${RESP}"
+assert_contains "OpenAI image: response mentions media type" \
+    "data['choices'][0]['message']['content']" "image/png" "${RESP}"
+
+#############################################################################
+echo "=== POST /v1/chat/completions (OpenAI image_url, malformed base64) ==="
+# Decode failures should be surfaced inline (mock acknowledges them) without
+# 4xx-ing the whole request — same as how OpenAI behaves when the model
+# can't read the image.
+RESP="$(curl -fsS -X POST "${BASE_URL}/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "model": "omni-mock",
+        "messages": [{"role":"user","content":[
+            {"type":"text","text":"describe"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,!!!not_base64!!!"}}
+        ]}]
+    }')"
+assert_contains "OpenAI image: bad base64 surfaces decode error in mock reply" \
+    "data['choices'][0]['message']['content']" "failed to decode" "${RESP}"
+
+#############################################################################
+echo "=== POST /v1/messages (Anthropic image source) ==="
+RESP="$(curl -fsS -X POST "${BASE_URL}/v1/messages" \
+    -H 'Content-Type: application/json' \
+    -H 'anthropic-version: 2023-06-01' \
+    -d "$(python3 -c "
+import json, sys
+print(json.dumps({
+    'model': 'claude-omni-mock',
+    'max_tokens': 256,
+    'messages': [{
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'describe'},
+            {'type': 'image', 'source': {
+                'type': 'base64',
+                'media_type': 'image/png',
+                'data': '${TINY_PNG_B64}',
+            }},
+        ],
+    }],
+}))
+")")"
+assert_contains "Anthropic image: response mentions 1 image" \
+    "[b['text'] for b in data['content'] if b['type']=='text'][0]" \
+    "1 image" "${RESP}"
+assert_contains "Anthropic image: response mentions dimensions" \
+    "[b['text'] for b in data['content'] if b['type']=='text'][0]" \
+    "1x1" "${RESP}"
+
+#############################################################################
+echo "=== POST /v1/chat/completions (image + tools) ==="
+# When an image *and* tools are both attached, the mock invokes the first
+# tool with both the user's text echo *and* an `images` field describing
+# what was attached. This proves the vision metadata reaches the
+# tool-calling path, not just the text path.
+RESP="$(curl -fsS -X POST "${BASE_URL}/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "$(python3 -c "
+import json
+url = 'data:image/png;base64,${TINY_PNG_B64}'
+print(json.dumps({
+    'model': 'omni-mock',
+    'messages': [{
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'what is this'},
+            {'type': 'image_url', 'image_url': {'url': url}},
+        ],
+    }],
+    'tools': [{
+        'type': 'function',
+        'function': {
+            'name': 'describe',
+            'description': 'describe what is in the image',
+            'parameters': {'type': 'object', 'properties': {}},
+        },
+    }],
+}))
+")")"
+TOOL_ARGS="$(python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+print(data['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+" <<<"${RESP}")"
+case "${TOOL_ARGS}" in
+    *images*1x1*) ok "tool_call args carry image dimensions" ;;
+    *) fail "tool_call args missing image info" "${TOOL_ARGS}" ;;
+esac
 
 #############################################################################
 echo "=== CORS preflight (OPTIONS) ==="

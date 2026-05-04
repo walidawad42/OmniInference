@@ -209,14 +209,62 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 ```
 
+## Vision (Stage B)
+
+OpenAI-style `image_url` content parts are now decoded server-side via
+stb_image. The flow:
+
+```json
+{
+    "model": "omni-mock",
+    "messages": [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "describe this"},
+            {"type": "image_url",
+             "image_url": {"url": "data:image/png;base64,iVBORw0KG..."}}
+        ]
+    }]
+}
+```
+
+OmniServer:
+
+1. Parses the request and walks every `image_url` content part.
+2. Decodes the `data:` URI (base64 → raw bytes) and runs it through
+   stb_image (PNG / JPEG / BMP / GIF / TGA). The result is a packed-RGB
+   raster + width / height / source media type, attached back onto the
+   content part.
+3. Hands the request to the engine. Mock mode acknowledges every image
+   in the assistant's reply (`(with 1 image: image/png 1x1)`); a real
+   vision-capable engine consumes the pixels.
+
+Decode failures (malformed base64, corrupted PNG, unsupported media
+type) do **not** 4xx the request. Instead, the failed part is left
+without `decoded_image` populated and the mock surfaces the error
+inline (`(with 1 image: image/png (decode failed: stb_image decode
+failed: ...))`). This matches OpenAI's behaviour where the model still
+responds even when a vision input is unreadable.
+
+`http://` / `https://` URLs are intentionally **not** fetched yet —
+that needs a TLS-capable allow-listed HTTP client and a separate
+opt-in. In the meantime, base64 your images on the client side.
+
 ## Limits in Stage A
 
-- Vision (`image_url` content parts) is parsed but the engine returns
-  text-only responses; the image is dropped silently. Real vision lands
-  in Stage B.
 - Audio inputs are not parsed at all.
 - `/v1/embeddings` always returns the `no_embedding_model` envelope.
 - `--mock` uses a deterministic canned response. To exercise real
   inference, drop `--mock` and load a model via `POST /v1/models/load` (or
   pre-load in code). Real-engine streaming surfaces only text deltas — the
   engine doesn't yet have a tool-calling protocol.
+
+## Limits in Stage B
+
+- Real vision-language inference is not wired into OmniEngine yet — the
+  decode pipeline lands here, but actually pushing the pixels through a
+  CLIP / SigLIP encoder + projecting them into the LLM's embedding space
+  is Stage B2. Tracking which backend (a second modern llama.cpp on CPU
+  vs. an older but cc 3.0–compatible LLaVA-1.5/1.6 path) is the right
+  fit for the K5100M is a Stage B2 design call; until then, the mock
+  echoes back what it received so vision plumbing is testable.

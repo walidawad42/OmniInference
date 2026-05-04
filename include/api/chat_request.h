@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,6 +19,12 @@
 #include <nlohmann/json.hpp>
 
 namespace omni::api {
+
+// Forward-declare the decoded image type so ContentPart can hold a
+// shared_ptr to one without dragging in stb_image. The full definition
+// lives in api/image_decode.h; only TUs that actually want to *look at*
+// the pixels need to include it.
+struct DecodedImage;
 
 enum class Role {
     kSystem,
@@ -49,6 +56,14 @@ struct ContentPart {
     std::string tool_name;            // for kToolUse
     nlohmann::json tool_arguments;    // for kToolUse, parsed JSON object
     bool        tool_result_is_error = false;  // for kToolResult
+
+    // Stage B: lazily-attached decoded pixels. Populated by
+    // `omni::api::DecodeImagesIn(ChatRequest&)` (image_decode.h) before the
+    // request reaches the engine, or left null if decode was skipped /
+    // failed. `image_decode_error` carries the failure reason for surfacing
+    // back to the caller.
+    std::shared_ptr<DecodedImage> decoded_image;
+    std::string                   image_decode_error;
 };
 
 struct Message {
