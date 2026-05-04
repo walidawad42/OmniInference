@@ -225,9 +225,25 @@ void OmniServer::SetupRoutes() {
     });
 
     // --- Health ----------------------------------------------------------
-    srv.Get("/health", wrap_json("openai", [this](const httplib::Request&, const json&) {
-        return HandleHealthCheck();
-    }));
+    // Mounted directly (NOT wrapped through the auth-aware wrap_json helper)
+    // so it stays reachable without credentials. Liveness / readiness
+    // probes — including our own tests/api/run_tests.sh ready-loop —
+    // wouldn't be able to detect "server up but key required" without a
+    // public health endpoint, and exposing only "alive: true" carries no
+    // sensitive information.
+    srv.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+        http_server_->ApplyCors(res);
+        try {
+            res.status = 200;
+            res.set_content(HandleHealthCheck().dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(api::openai::BuildError(e.what(),
+                                                    "internal_error",
+                                                    "internal_error").dump(),
+                            "application/json");
+        }
+    });
 
     // --- Models list -----------------------------------------------------
     srv.Get("/v1/models", wrap_json("openai", [this](const httplib::Request&, const json&) {
@@ -259,14 +275,49 @@ void OmniServer::SetupRoutes() {
         }
         const bool streaming = body.value("stream", false);
         if (streaming) {
+            // Pre-validate the request shape NOW, before set_chunked_content_provider
+            // commits the response to 200 / text/event-stream. Otherwise a
+            // semantically-invalid body (e.g. missing "messages") would throw
+            // out of the streaming lambda — too late to send a proper 400.
+            try {
+                (void)api::openai::ParseChatRequest(body);
+            } catch (const std::invalid_argument& e) {
+                res.status = 400;
+                res.set_content(api::openai::BuildError(e.what(),
+                                                        "invalid_request_error",
+                                                        "bad_request").dump(),
+                                "application/json");
+                return;
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(api::openai::BuildError(e.what(),
+                                                        "internal_error",
+                                                        "internal_error").dump(),
+                                "application/json");
+                return;
+            }
             res.set_chunked_content_provider(
                 "text/event-stream",
                 [this, body](size_t /*offset*/, httplib::DataSink& sink) {
                     auto wrap = [&sink](const char* data, size_t len) -> bool {
                         return sink.write(data, len);
                     };
-                    json out;
-                    HandleOpenAIChatCompletion(body, out, wrap);
+                    // Defence in depth: if the engine itself throws after
+                    // we've already committed to SSE, emit a final
+                    // `data: {error...}` + `data: [DONE]` so the client
+                    // library surfaces the failure instead of seeing a
+                    // truncated stream.
+                    try {
+                        json out;
+                        HandleOpenAIChatCompletion(body, out, wrap);
+                    } catch (const std::exception& e) {
+                        const json err = api::openai::BuildError(
+                            e.what(), "internal_error", "internal_error");
+                        const std::string msg = "data: " + err.dump() + "\n\n";
+                        sink.write(msg.data(), msg.size());
+                        const std::string done = "data: [DONE]\n\n";
+                        sink.write(done.data(), done.size());
+                    }
                     sink.done();
                     return true;
                 });
@@ -350,14 +401,41 @@ void OmniServer::SetupRoutes() {
         }
         const bool streaming = body.value("stream", false);
         if (streaming) {
+            // Same pre-validate-then-commit dance as the OpenAI route — see
+            // the matching block above for rationale.
+            try {
+                (void)api::anthropic::ParseMessagesRequest(body);
+            } catch (const std::invalid_argument& e) {
+                res.status = 400;
+                res.set_content(api::anthropic::BuildError(e.what(),
+                                                           "invalid_request_error").dump(),
+                                "application/json");
+                return;
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(api::anthropic::BuildError(e.what(),
+                                                           "internal_error").dump(),
+                                "application/json");
+                return;
+            }
             res.set_chunked_content_provider(
                 "text/event-stream",
                 [this, body](size_t /*offset*/, httplib::DataSink& sink) {
                     auto wrap = [&sink](const char* data, size_t len) -> bool {
                         return sink.write(data, len);
                     };
-                    json out;
-                    HandleAnthropicMessages(body, out, wrap);
+                    try {
+                        json out;
+                        HandleAnthropicMessages(body, out, wrap);
+                    } catch (const std::exception& e) {
+                        // Anthropic streams use named events. Emit a final
+                        // `event: error` with the standard error envelope so
+                        // the SDK reports a clean failure instead of a cut
+                        // stream. message_stop is intentionally omitted —
+                        // we never reached the assistant message at all.
+                        api::sse::EmitAnthropic(wrap, "error",
+                            api::anthropic::BuildError(e.what(), "internal_error"));
+                    }
                     sink.done();
                     return true;
                 });
@@ -705,9 +783,16 @@ bool OmniServer::HandleAnthropicMessages(const json& body,
                     output_tokens += static_cast<int>((chunk.text_delta.size() + 3) / 4);
                     break;
                 case api::StreamChunk::Kind::kToolCallStart: {
+                    // Close whatever block was previously open before
+                    // starting a new tool_use. Anthropic's protocol requires
+                    // a content_block_stop for *every* opened block; if we
+                    // skipped this for back-to-back tool_use blocks the
+                    // SDK would either error or silently drop blocks 0..N-2.
                     if (text_block_open) {
                         emit(api::anthropic::BuildContentBlockStop(current_text_block));
                         text_block_open = false;
+                    } else if (next_block_idx > 0) {
+                        emit(api::anthropic::BuildContentBlockStop(next_block_idx - 1));
                     }
                     int block_idx = next_block_idx++;
                     emit(api::anthropic::BuildContentBlockStartToolUse(
