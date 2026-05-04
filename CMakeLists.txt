@@ -137,12 +137,22 @@ FetchContent_Declare(cpp_httplib
     GIT_TAG v0.14.3
 )
 
+# stb is a public-domain single-header library collection. We use stb_image.h
+# (PNG / JPG / BMP / GIF decode) and stb_image_resize2.h (bilinear / bicubic
+# resize) for the Stage B vision input pipeline. Pinned to a known-good
+# commit to keep the build reproducible. No CMake target ships with stb;
+# we just include the SOURCE_DIR.
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG f0569113c93ad095470c54bf34a17b36646bbbb5
+)
+
 # Note: TurboQuant Plus was previously fetched from an external GitHub
 # repository that no longer exists. The TurboQuant pipeline implementation
 # now lives directly in src/turboquant_pipeline.cpp and src/turbo_quant_kernels.cu
 # and is built as part of OmniCore below, so no FetchContent declaration is
 # required for it.
-FetchContent_MakeAvailable(json imgui imgui_node_editor cpp_httplib)
+FetchContent_MakeAvailable(json imgui imgui_node_editor cpp_httplib stb)
 
 # Neither ImGui nor imgui-node-editor ships a CMake target on their pinned
 # tags, so build small static libraries here that downstream targets link
@@ -291,6 +301,10 @@ set(OMNI_CORE_SOURCES
     src/api/tool_translator.cpp
     src/api/sse_writer.cpp
     src/api/mock_engine.cpp
+    # Stage B: vision input pipeline (data-URI / base64 decode, resize,
+    # normalise). Keeps the API-agnostic shape so MockEngine and the real
+    # vision backend (Stage B2) consume the same DecodedImage type.
+    src/api/image_decode.cpp
 )
 
 if(OMNI_HAVE_CUDA)
@@ -303,6 +317,7 @@ target_include_directories(OmniCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${nlohmann_json_SOURCE_DIR}/include
     ${cpp_httplib_SOURCE_DIR}
+    ${stb_SOURCE_DIR}
     ${CURL_INCLUDE_DIRS}
 )
 

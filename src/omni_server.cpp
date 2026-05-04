@@ -19,6 +19,7 @@
 
 #include "api/anthropic_schema.h"
 #include "api/chat_request.h"
+#include "api/image_decode.h"
 #include "api/mock_engine.h"
 #include "api/openai_schema.h"
 #include "api/sse_writer.h"
@@ -598,6 +599,12 @@ bool OmniServer::HandleOpenAIChatCompletion(const json& body,
     if (req.model.empty()) {
         req.model = cfg_.default_model_id;
     }
+    // Decode any image_url content parts into raw RGB pixels so the engine
+    // (or the mock acknowledgement string) doesn't have to re-implement
+    // base64 + stb_image. Decode failures are surfaced via the part's
+    // `image_decode_error`; we deliberately do NOT 4xx the whole request
+    // because OpenAI semantics say the model should still respond.
+    api::DecodeImagesIn(req);
 
     if (req.params.stream && sink) {
         const std::string response_id = "chatcmpl-" + std::to_string(std::time(nullptr));
@@ -657,6 +664,10 @@ bool OmniServer::HandleAnthropicMessages(const json& body,
     if (req.model.empty()) {
         req.model = cfg_.default_model_id;
     }
+    // Same decode-then-pass pattern as the OpenAI path. Anthropic image
+    // sources (base64 or URL) have already been collapsed to a `data:` URI
+    // by ParseMessagesRequest, so we just hit the unified decoder here.
+    api::DecodeImagesIn(req);
 
     if (req.params.stream && sink) {
         const std::string message_id = "msg_" + std::to_string(std::time(nullptr));

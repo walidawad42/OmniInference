@@ -204,10 +204,44 @@ export ANTHROPIC_API_KEY="sk-omni-local"
 aider --model anthropic/claude-omni-mock
 ```
 
+## Vision (Stage B)
+
+Anthropic image content blocks are now decoded server-side. Both
+`base64` and `url` source types are accepted in the parsed request,
+and the base64 path is decoded via stb_image:
+
+```json
+{
+    "model": "claude-omni-mock",
+    "max_tokens": 256,
+    "messages": [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "describe this"},
+            {"type": "image", "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KG..."
+            }}
+        ]
+    }]
+}
+```
+
+Internally we collapse `image.source` into the same `data:` URI shape
+the OpenAI side uses, so a single decoder serves both APIs. The mock
+acknowledges every decoded image in its assistant text (`(with 1
+image: image/png 1x1)`); when a real vision-capable engine lands
+(Stage B2), the same `decoded_image` is fed into its CLIP / SigLIP
+encoder.
+
+Decode failures don't 4xx — the part is left without `decoded_image`
+populated and the mock surfaces the error inline. URL-source images
+(`source.type == "url"`) are parsed but not fetched yet; pass images
+as base64 for now.
+
 ## Limits in Stage A
 
-- Image content blocks (`{"type": "image", "source": {...}}`) are parsed
-  but the engine ignores them; vision lands in Stage B.
 - The mock engine deterministically invokes the *first* tool with
   `{"echo": <last user message>}`.
 - Real-engine tool calling isn't wired through OmniEngine yet — when

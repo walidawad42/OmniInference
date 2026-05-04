@@ -81,6 +81,19 @@ std::vector<ContentPart> ParseContent(const nlohmann::json& content) {
             } else {
                 part.image_url = item.value("image_url", "");
             }
+            // OpenAI doesn't ship the media type as a separate field — it's
+            // baked into the `data:<mime>;base64,...` URL. Sniff it now so
+            // the rest of the pipeline (vision encoder, mock responder, ...)
+            // doesn't have to re-parse the URL string.
+            if (part.image_url.compare(0, 5, "data:") == 0) {
+                const auto comma = part.image_url.find(',');
+                if (comma != std::string::npos) {
+                    std::string head = part.image_url.substr(5, comma - 5);
+                    auto semi = head.find(';');
+                    part.image_media_type = (semi == std::string::npos)
+                        ? head : head.substr(0, semi);
+                }
+            }
             out.push_back(std::move(part));
         }
         // Unknown content types are dropped silently — we'd rather forward
