@@ -50,3 +50,7 @@ logs/
 .DS_Store
 Thumbs.db
 *.tmp
+# Vendored third-party sources fetched on demand by helper scripts (e.g.
+# scripts/setup_llama_cpp_kepler.sh). Not tracked because we pin via the
+# script rather than via a submodule.
+vendor/
