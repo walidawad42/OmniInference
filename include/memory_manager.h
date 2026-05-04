@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
-#include <map>
-#include <json.hpp>
-#include <cstdint>
 
 using json = nlohmann::json;
 
@@ -44,6 +45,17 @@ struct MemoryPolicy {
     std::string swap_directory = "./swap";
     float utilization_threshold = 0.85f; // Start overflow at 85%
     bool force_pinned_memory = false;
+    // When true, MemoryManager prefers throughput-friendly allocations
+    // (larger contiguous chunks, pinned memory) over space efficiency.
+    bool optimize_for_throughput = false;
+};
+
+// Lightweight tokens-per-second telemetry surfaced to the GUI.
+struct TPSMetrics {
+    float current_tps = 0.0f;
+    float average_tps = 0.0f;
+    float memory_overhead_percent = 0.0f;
+    bool is_optimal = false;
 };
 
 class MemoryManager {
@@ -85,6 +97,14 @@ public:
     MemoryBuffer GetBufferStats() const;
     std::vector<VRAMAllocation> GetAllocations() const;
     json ExportMemoryStatistics() const;
+    json GetMemoryHealthReport() const;
+    float GetVRAMUtilizationPercent() const;
+    TPSMetrics GetTPSMetrics() const;
+
+    // ========== TUNING ==========
+    bool SetDeterministicBuffer(uint64_t reserved_bytes);
+    void OptimizeForThroughput();
+    void RecordTokenThroughput(float tokens_per_second);
 
     // ========== PREDICTION ==========
     bool CanFitModel(uint64_t model_size, int context_length) const;
@@ -115,6 +135,11 @@ private:
     // Policy
     MemoryPolicy policy_;
     OverflowCallback overflow_callback_;
+
+    // Throughput telemetry (latest sample + EMA average).
+    float last_tps_ = 0.0f;
+    float average_tps_ = 0.0f;
+    uint64_t tps_sample_count_ = 0;
 
     // Helper methods
     void QueryHardwareMemory();

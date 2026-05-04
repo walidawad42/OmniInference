@@ -1,8 +1,15 @@
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <SDL2/SDL.h>
-#include <GL/gl3w.h>
+#if defined(_WIN32)
+    #include <windows.h>
+    #include <GL/gl.h>
+#elif defined(__APPLE__)
+    #include <OpenGL/gl.h>
+#else
+    #include <GL/gl.h>
+#endif
 #include <iostream>
 #include "gui_visual_control.h"
 #include "gui_memory_buffer_panel.h"
@@ -31,7 +38,11 @@ int main(int argc, char* argv[]) {
     SDL_GL_MakeCurrent(window, gl_context);
     SDL_GL_SetSwapInterval(1);
 
-    if (gl3wInit()) {
+    // ImGui's OpenGL3 backend (with IMGUI_IMPL_OPENGL_LOADER_CUSTOM=0 by
+    // default) loads its own GL function pointers via the system loader, so
+    // we no longer need an explicit gl3wInit() call. Just verify we managed
+    // to obtain a context.
+    if (!gl_context) {
         std::cerr << "Failed to initialize OpenGL" << std::endl;
         return 1;
     }

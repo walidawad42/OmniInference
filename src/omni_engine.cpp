@@ -317,17 +317,26 @@ std::map<std::string, float> OmniEngine::GetAllModelParameters() const {
 
 void OmniEngine::ApplyOptimizationMatrix() {
     std::cout << "[OmniEngine] === OPTIMIZATION MATRIX ===" << std::endl;
-    
-    uint64_t vram_usable = hw_profile_.vram_total_bytes - (1024 * 1024 * 1024); // 1GB buffer
-    uint64_t required = EstimateMemoryUsage(current_model_params_, active_quant_cfg_);
-    
-    std::cout << "[Solver] VRAM Constraint: " << (vram_usable / (1024*1024*1024)) << "GB" << std::endl;
-    std::cout << "[Solver] Required Memory: " << (required / (1024*1024*1024)) << "GB" << std::endl;
-    
-    if (required <= vram_usable) {
-        std::cout << "[Solver] ✓ Configuration VALID - Full GPU offload enabled" << std::endl;
+
+    // `vram_total_bytes` is unsigned and is 0 on CPU-fallback hosts (no CUDA
+    // device). The previous expression `vram_total_bytes - 1GB` underflowed
+    // to ~uint64_max and made the configuration check incorrectly succeed.
+    constexpr uint64_t kVramBufferBytes = static_cast<uint64_t>(1) << 30; // 1 GiB safety buffer
+    const uint64_t vram_usable =
+        hw_profile_.vram_total_bytes > kVramBufferBytes
+            ? hw_profile_.vram_total_bytes - kVramBufferBytes
+            : 0;
+    const uint64_t required = EstimateMemoryUsage(current_model_params_, active_quant_cfg_);
+
+    std::cout << "[Solver] VRAM Constraint: " << (vram_usable / (1024 * 1024 * 1024)) << "GB" << std::endl;
+    std::cout << "[Solver] Required Memory: " << (required / (1024 * 1024 * 1024)) << "GB" << std::endl;
+
+    if (vram_usable == 0) {
+        std::cout << "[Solver] No GPU VRAM available - using CPU/RAM fallback path" << std::endl;
+    } else if (required <= vram_usable) {
+        std::cout << "[Solver] Configuration VALID - Full GPU offload enabled" << std::endl;
     } else {
-        std::cout << "[Solver] ✗ Overflow detected - Switching to layer offload strategy" << std::endl;
+        std::cout << "[Solver] Overflow detected - Switching to layer offload strategy" << std::endl;
     }
 }
 
@@ -376,4 +385,32 @@ void OmniEngine::PrintHardwareReport() const {
     std::cout << "Tensor Cores: " << (hw_profile_.supports_tensor_cores ? "YES" : "NO") << std::endl;
     std::cout << "Flash Attention: " << (hw_profile_.supports_flash_attention ? "YES" : "NO") << std::endl;
     std::cout << "====================================\n" << std::endl;
+}
+bool OmniEngine::OptimizeForHardware(ModelParameters& params,
+                                     TurboQuantConfig& quant) {
+    // Lightweight hardware-aware autotuner used by the GUI's "Memory
+    // Optimizer" button. We dial down KV-cache precision and trim the
+    // context window when the detected device has a small VRAM budget; on
+    // CPU-fallback hosts we further drop to int4 weights with int2 V-cache
+    // so the model has any chance of fitting.
+    constexpr uint64_t kEightGiB = static_cast<uint64_t>(8) << 30;
+    constexpr uint64_t kSixteenGiB = static_cast<uint64_t>(16) << 30;
+
+    if (hw_profile_.backend == HardwareBackend::CPU_FALLBACK ||
+        hw_profile_.vram_total_bytes < kEightGiB) {
+        quant.key_bits = 4;
+        quant.value_bits = 2;
+        quant.use_polar_transform = true;
+        params.n_ctx = std::min(params.n_ctx, 4096);
+    } else if (hw_profile_.vram_total_bytes < kSixteenGiB) {
+        quant.key_bits = 4;
+        quant.value_bits = 4;
+        quant.use_polar_transform = true;
+        params.n_ctx = std::min(params.n_ctx, 8192);
+    } else {
+        quant.key_bits = 8;
+        quant.value_bits = 8;
+        quant.use_polar_transform = false;
+    }
+    return true;
 }

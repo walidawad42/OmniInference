@@ -1,9 +1,7 @@
 #include "gui_node_editor.h"
 #include <iostream>
 
-GUINodeEditor::GUINodeEditor()
-    : next_node_id_(1), next_link_id_(1), next_pin_id_(1) {
-}
+GUINodeEditor::GUINodeEditor() = default;
 
 GUINodeEditor::~GUINodeEditor() {
     if (editor_context_) {
@@ -114,10 +112,11 @@ void GUINodeEditor::RenderNode(NodeData& node) {
 
 void GUINodeEditor::AddNode(const std::string& node_type, const ImVec2& position) {
     NodeData node;
-    node.id = static_cast<ed::NodeId>(next_node_id_++);
+    const uintptr_t id_value = next_node_id_++;
+    node.id = ed::NodeId(id_value);
     node.type = node_type;
     node.position = position;
-    node.title = node_type + " #" + std::to_string(node.id.AsPointer());
+    node.title = node_type + " #" + std::to_string(id_value);
 
     // Initialize default parameters
     if (node_type == "model") {
@@ -148,7 +147,7 @@ void GUINodeEditor::DeleteNode(ed::NodeId node_id) {
 
 void GUINodeEditor::CreateLink(ed::PinId from, ed::PinId to) {
     LinkData link;
-    link.id = static_cast<ed::LinkId>(next_link_id_++);
+    link.id = ed::LinkId(next_link_id_++);
     link.from_pin = from;
     link.to_pin = to;
     links_.push_back(link);
@@ -163,7 +162,7 @@ void GUINodeEditor::DeleteLink(ed::LinkId link_id) {
 }
 
 ed::PinId GUINodeEditor::GeneratePinId() {
-    return static_cast<ed::PinId>(next_pin_id_++);
+    return ed::PinId(next_pin_id_++);
 }
 
 void GUINodeEditor::RenderLink(const LinkData& link) {

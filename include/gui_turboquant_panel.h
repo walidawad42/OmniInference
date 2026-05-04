@@ -1,7 +1,7 @@
 #pragma once
 
 #include "turboquant_pipeline.h"
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <vector>
 #include <string>
 

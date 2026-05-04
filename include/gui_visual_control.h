@@ -1,7 +1,7 @@
 #pragma once
 
 #include "omni_engine.h"
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <string>
 #include <vector>
 #include <map>

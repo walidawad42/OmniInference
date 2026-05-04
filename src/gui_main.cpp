@@ -8,6 +8,17 @@
 #include <mutex>
 #include <thread>
 
+// glClear / glClearColor / GL_COLOR_BUFFER_BIT live in the system OpenGL
+// headers; ImGui's OpenGL3 backend does not pull them in for us.
+#if defined(_WIN32)
+    #include <windows.h>
+    #include <GL/gl.h>
+#elif defined(__APPLE__)
+    #include <OpenGL/gl.h>
+#else
+    #include <GL/gl.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -332,7 +343,16 @@ void GUIMainWindow::RenderGenerationPanel() {
         ImGui::Separator();
 
         ImGui::TextUnformatted("Output:");
-        ImGui::InputTextMultiline("##output", output_buffer_, sizeof(output_buffer_),
+        // `output_buffer_` is mutated by the detached generation thread under
+        // `output_mutex_`, so we cannot hand the live buffer to ImGui (which
+        // reads it byte-by-byte without any lock of its own). Take a quick
+        // snapshot under the lock and let ImGui scan the snapshot instead.
+        char output_snapshot[sizeof(output_buffer_)];
+        {
+            std::lock_guard<std::mutex> lock(output_mutex_);
+            std::memcpy(output_snapshot, output_buffer_, sizeof(output_buffer_));
+        }
+        ImGui::InputTextMultiline("##output", output_snapshot, sizeof(output_snapshot),
                                  ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
         ImGui::End();

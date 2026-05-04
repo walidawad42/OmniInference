@@ -183,7 +183,7 @@ void GUIMemoryBufferPanel::RenderBufferConfiguration() {
     ImGui::HelpMarker("Automatically move data to system RAM when VRAM full");
 
     if (enable_ram_overflow_) {
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "⚠️ RAM overflow reduces TPS by 50-70%");
+        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "%s", "⚠️ RAM overflow reduces TPS by 50-70%");
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "💡 Tip: Use smaller context or quantization to avoid");
     }
 
@@ -268,7 +268,7 @@ void GUIMemoryBufferPanel::RenderVRAMStatus() {
     ImGui::Text("Total VRAM:");
     ImGui::NextColumn();
     ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%.2f GB", total_gb);
-    ImGui::NextColumn;
+    ImGui::NextColumn();
 
     ImGui::Text("Utilization:");
     ImGui::NextColumn();
@@ -357,4 +357,22 @@ void GUIMemoryBufferPanel::UpdateHistories() {
 
     ram_history_.erase(ram_history_.begin());
     ram_history_.push_back(ram_mb);
+}
+void GUIMemoryBufferPanel::Render() {
+    // Top-level entry point for the panel; main_visual.cpp wires this into
+    // the OmniInference window. The two subsections below are the only ones
+    // currently implemented — additional `Render*` slots are reserved in
+    // the header for future expansion (allocation table, tiering, etc.).
+    if (ImGui::Begin("Memory & Buffer")) {
+        if (ImGui::CollapsingHeader("Buffer Configuration",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            RenderBufferConfiguration();
+        }
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("VRAM Status",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            RenderVRAMStatus();
+        }
+    }
+    ImGui::End();
 }

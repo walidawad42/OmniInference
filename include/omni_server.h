@@ -10,7 +10,8 @@
 #include <thread>
 #include <utility>
 
-#include <json.hpp>
+#include <nlohmann/json.hpp>
+using nlohmann::json;
 
 using json = nlohmann::json;
 
