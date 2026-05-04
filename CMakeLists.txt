@@ -127,12 +127,22 @@ FetchContent_Declare(imgui_node_editor
     GIT_TAG v0.9.3
 )
 
+# cpp-httplib is a header-only HTTP/1.1 server + client library. The Stage A
+# OpenAI-compatible / Anthropic-compatible API server in src/api/ uses it as
+# its transport. v0.14.3 is the last release that still compiles with the
+# C++14 nvcc fallback we keep for CUDA 10.x hosts (PR #3); newer cpp-httplib
+# tags require C++17 features in their public headers.
+FetchContent_Declare(cpp_httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.14.3
+)
+
 # Note: TurboQuant Plus was previously fetched from an external GitHub
 # repository that no longer exists. The TurboQuant pipeline implementation
 # now lives directly in src/turboquant_pipeline.cpp and src/turbo_quant_kernels.cu
 # and is built as part of OmniCore below, so no FetchContent declaration is
 # required for it.
-FetchContent_MakeAvailable(json imgui imgui_node_editor)
+FetchContent_MakeAvailable(json imgui imgui_node_editor cpp_httplib)
 
 # Neither ImGui nor imgui-node-editor ships a CMake target on their pinned
 # tags, so build small static libraries here that downstream targets link
@@ -275,6 +285,12 @@ set(OMNI_CORE_SOURCES
     src/monitoring.cpp
     src/markdown_exporter.cpp
     src/omni_server.cpp
+    # Stage A: OpenAI-compatible / Anthropic-compatible API surface.
+    src/api/openai_schema.cpp
+    src/api/anthropic_schema.cpp
+    src/api/tool_translator.cpp
+    src/api/sse_writer.cpp
+    src/api/mock_engine.cpp
 )
 
 if(OMNI_HAVE_CUDA)
@@ -286,10 +302,18 @@ add_library(OmniCore STATIC ${OMNI_CORE_SOURCES})
 target_include_directories(OmniCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${nlohmann_json_SOURCE_DIR}/include
+    ${cpp_httplib_SOURCE_DIR}
     ${CURL_INCLUDE_DIRS}
 )
 
 target_link_libraries(OmniCore PUBLIC ${CURL_LIBRARIES})
+
+# cpp-httplib needs threading on every platform we support; fold the right
+# pthread / Windows threading library in once at the OmniCore level so every
+# downstream consumer (the GUI app, the API server executable, the tests)
+# inherits it.
+find_package(Threads REQUIRED)
+target_link_libraries(OmniCore PUBLIC Threads::Threads)
 
 if(OMNI_HAVE_CUDA)
     target_link_libraries(OmniCore PUBLIC
@@ -378,10 +402,27 @@ if(WIN32)
 endif()
 
 # ============================================================
+# OMNI SERVER (Stage A: OpenAI + Anthropic API server)
+# ============================================================
+# A separate, headless executable that exposes OmniCore over HTTP. It's
+# kept distinct from OmniInference (the SDL2 / ImGui GUI) so the API
+# server can be deployed without bringing in the GUI's runtime deps.
+add_executable(OmniServer src/main_server.cpp)
+target_include_directories(OmniServer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${nlohmann_json_SOURCE_DIR}/include
+    ${cpp_httplib_SOURCE_DIR}
+)
+target_link_libraries(OmniServer PRIVATE OmniCore)
+if(WIN32)
+    target_link_libraries(OmniServer PRIVATE ws2_32)
+endif()
+
+# ============================================================
 # INSTALLATION
 # ============================================================
 
-install(TARGETS OmniInference RUNTIME DESTINATION bin)
+install(TARGETS OmniInference OmniServer RUNTIME DESTINATION bin)
 install(DIRECTORY models DESTINATION . OPTIONAL)
 install(DIRECTORY workflows DESTINATION . OPTIONAL)
 
