@@ -76,6 +76,52 @@ the realistic operating point.
 
 ---
 
+## 🌐 API server (OpenAI- + Anthropic-compatible)
+
+OmniServer is a separate, headless executable that exposes OmniCore over
+HTTP. Any tool that already speaks the OpenAI or Anthropic API (Aider,
+Cline, Continue.dev, Claude Code, the official `openai` / `anthropic`
+SDKs, LangChain, …) talks to it without code changes — you just point
+the tool at `http://localhost:8080`.
+
+```bash
+# Build everything (OmniServer is built alongside OmniInference)
+cmake -S . -B build
+cmake --build build -j
+
+# Smoke-test the entire HTTP surface without loading a model
+./build/OmniServer --mock --port 8080
+```
+
+```bash
+# OpenAI-compatible
+curl http://localhost:8080/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"omni-mock","messages":[{"role":"user","content":"hi"}]}'
+
+# Anthropic-compatible
+curl http://localhost:8080/v1/messages \
+    -H 'Content-Type: application/json' \
+    -H 'anthropic-version: 2023-06-01' \
+    -d '{"model":"claude-omni-mock","max_tokens":256,
+         "messages":[{"role":"user","content":"hi"}]}'
+```
+
+Both endpoints support streaming (`"stream": true`), tool calling, and a
+shared bearer-token auth (`--api-key sk-omni-local`). Full details:
+
+- [`docs/api/openai.md`](docs/api/openai.md) — OpenAI endpoints, request/response
+  shapes, Aider / Cline / Continue.dev / LangChain config snippets.
+- [`docs/api/anthropic.md`](docs/api/anthropic.md) — Anthropic `/v1/messages`,
+  Claude Code / Aider (Anthropic mode) config snippets.
+
+A round-trip integration test against a live `--mock` server lives at
+[`tests/api/run_tests.sh`](tests/api/run_tests.sh) and exercises 37
+assertions covering streaming, tools, embeddings 501, CORS preflight,
+and bearer auth.
+
+---
+
 ## 🎯 Quick Start
 
 ### Download (Linux/Pop!_OS)
