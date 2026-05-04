@@ -193,26 +193,68 @@ endif()
 # LLAMA.CPP INTEGRATION
 # ============================================================
 
+# When the user has run scripts/setup_llama_cpp_kepler.sh and pinned
+# vendor/llama.cpp to a mid-2023 tag (b1500 by default), this option
+# re-enables the GGML_CUDA backend on CUDA 10.x hosts using the legacy
+# DMMV kernel path that still supports compute capability 3.0.
+option(OMNI_LLAMACPP_KEPLER_OVERRIDE
+       "Force GGML_CUDA=ON on CUDA 10.x for Kepler / sm_30 cards. \
+Requires vendor/llama.cpp pinned to a Kepler-compatible commit \
+(see scripts/setup_llama_cpp_kepler.sh)."
+       OFF)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/llama.cpp/CMakeLists.txt")
     message(STATUS "[llama.cpp] Found, integrating...")
 
-    # Modern llama.cpp's GGML_CUDA backend assumes CUDA >= 11. On older
-    # toolkits (e.g. CUDA 10.1 hosts targeting Kepler) we have to either
-    # build llama.cpp without its CUDA backend or pin an older llama.cpp
-    # commit. We default to the safe choice (CUDA backend off) and emit a
-    # status line so the operator knows what happened.
-    if(OMNI_HAVE_CUDA AND CUDAToolkit_VERSION_MAJOR LESS 11)
-        message(STATUS "[llama.cpp] CUDA ${CUDAToolkit_VERSION} < 11 detected; "
-                       "forcing GGML_CUDA=OFF. To use the CUDA backend on "
-                       "this host, pin vendor/llama.cpp to a commit from "
-                       "around mid-2023 (e.g. b1429) and re-enable manually.")
-        set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-    else()
-        set(GGML_CUDA ${OMNI_HAVE_CUDA} CACHE BOOL "" FORCE)
-    endif()
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-    set(GGML_CUDA_F16 ${GGML_CUDA} CACHE BOOL "" FORCE)
+
+    if(NOT OMNI_HAVE_CUDA)
+        # CPU/Vulkan-only build: nothing CUDA-related to enable.
+        set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+        set(GGML_CUDA_F16 OFF CACHE BOOL "" FORCE)
+    elseif(CUDAToolkit_VERSION_MAJOR LESS 11)
+        # CUDA 10.x: only enable GGML_CUDA when the user has explicitly
+        # opted in via -DOMNI_LLAMACPP_KEPLER_OVERRIDE=ON. Modern
+        # llama.cpp drops compute-capability 3.0 in its CUDA backend, so
+        # without a Kepler-compatible pin in vendor/llama.cpp this would
+        # fail to build.
+        if(OMNI_LLAMACPP_KEPLER_OVERRIDE)
+            message(STATUS "[llama.cpp] CUDA ${CUDAToolkit_VERSION} + Kepler "
+                           "override: enabling GGML_CUDA with the legacy "
+                           "DMMV kernel path (cc>=3.0).")
+            set(GGML_CUDA ON CACHE BOOL "" FORCE)
+            set(GGML_CUDA_F16 OFF CACHE BOOL "" FORCE)            # cc3.0 has no FP16 throughput
+            set(GGML_CUDA_FORCE_DMMV ON CACHE BOOL "" FORCE)      # legacy mat-vec path
+            set(GGML_CUDA_KQUANTS_ITER 2 CACHE STRING "" FORCE)
+            # Mirror the two non-default knobs into LLAMA_* in case the
+            # pinned llama.cpp tag predates the GGML_* renaming.
+            set(LLAMA_CUDA ON CACHE BOOL "" FORCE)
+            set(LLAMA_CUBLAS ON CACHE BOOL "" FORCE)
+            set(LLAMA_CUDA_F16 OFF CACHE BOOL "" FORCE)
+            set(LLAMA_CUDA_FORCE_DMMV ON CACHE BOOL "" FORCE)
+        else()
+            message(STATUS "[llama.cpp] CUDA ${CUDAToolkit_VERSION} < 11; "
+                           "GGML_CUDA off by default. Pass "
+                           "-DOMNI_LLAMACPP_KEPLER_OVERRIDE=ON if "
+                           "vendor/llama.cpp is pinned to a "
+                           "Kepler-compatible commit (see "
+                           "scripts/setup_llama_cpp_kepler.sh).")
+            set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+            set(GGML_CUDA_F16 OFF CACHE BOOL "" FORCE)
+        endif()
+    else()
+        # Modern path: CUDA 11+ with full feature set.
+        set(GGML_CUDA ON CACHE BOOL "" FORCE)
+        set(GGML_CUDA_F16 ON CACHE BOOL "" FORCE)
+    endif()
+
     add_subdirectory(vendor/llama.cpp)
+elseif(OMNI_LLAMACPP_KEPLER_OVERRIDE)
+    message(FATAL_ERROR
+        "OMNI_LLAMACPP_KEPLER_OVERRIDE was requested but "
+        "vendor/llama.cpp/ is not present. Run "
+        "scripts/setup_llama_cpp_kepler.sh first to pin llama.cpp to a "
+        "Kepler-compatible tag, then re-run cmake.")
 else()
     message(WARNING "[llama.cpp] Not found in vendor/. Skipping integration.")
 endif()

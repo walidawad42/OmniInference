@@ -47,9 +47,25 @@ natively builds for sm_30, so the build system has special-cased it:
 | 11.8+           | Arch list `50 60 70 75 80 86 89 90` (Ada / Hopper).                   |
 
 Because modern llama.cpp's GGML_CUDA backend assumes CUDA ≥ 11, the build
-turns it **off** automatically when CUDA major < 11. To use the CUDA
-backend on a CUDA 10.x host you have to pin `vendor/llama.cpp` to a
-mid-2023 commit (around `b1429`) and set `-DGGML_CUDA=ON` manually.
+turns it **off** automatically when CUDA major < 11. To actually use the
+K5100M for matmul on a CUDA 10.x host, opt in to the Kepler override:
+
+```bash
+# 1. Pin vendor/llama.cpp to a Kepler-compatible tag (b1500 by default).
+scripts/setup_llama_cpp_kepler.sh
+
+# 2. Re-configure with the override flag.
+cmake -S . -B build -DOMNI_LLAMACPP_KEPLER_OVERRIDE=ON
+cmake --build build -j
+```
+
+The override flips `GGML_CUDA=ON`, forces `GGML_CUDA_F16=OFF` (Kepler has
+no FP16 throughput), enables `GGML_CUDA_FORCE_DMMV=ON` (the legacy
+mat-vec kernel path that supports compute capability 3.0), and bumps
+`GGML_CUDA_KQUANTS_ITER` to 2. The same flags are mirrored under their
+`LLAMA_*` names in case the pinned llama.cpp tag predates the GGML_*
+renaming. If you re-run `cmake` without the override, the build silently
+falls back to the CPU/Vulkan-only configuration.
 
 Hardware-feature gates inside `OmniEngine` already mark Kepler as
 unsupported for Tensor Cores, FP16 throughput, and Flash Attention, so
