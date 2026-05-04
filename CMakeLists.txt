@@ -5,7 +5,12 @@ cmake_minimum_required(VERSION 3.20)
 # to a CPU/Vulkan-only build so the rest of the codebase still compiles.
 project(OmniInference VERSION 2.0.0 LANGUAGES C CXX)
 
-set(MINIMUM_CUDA_VERSION "11.4" CACHE STRING "Minimum CUDA version required")
+# 10.1 is the floor because that's the last toolkit family that natively
+# targets the Kepler / sm_30 GPU generation (e.g. Quadro K5100M). Modern
+# build hosts with CUDA 11+ are still preferred and exercise the full
+# kernel matrix; anything in between works as long as nvcc supports the
+# arch list we hand it.
+set(MINIMUM_CUDA_VERSION "10.1" CACHE STRING "Minimum CUDA version required")
 
 include(CheckLanguage)
 check_language(CUDA)
@@ -41,20 +46,37 @@ else()
 endif()
 
 # ============================================================
-# CUDA CONFIGURATION (11.4 MINIMUM)
+# CUDA CONFIGURATION (10.1 minimum, 11.4+ recommended)
 # ============================================================
 
 if(OMNI_HAVE_CUDA)
     message(STATUS "[CUDA] Minimum requirement: ${MINIMUM_CUDA_VERSION}")
-    message(STATUS "[CUDA] Supported architectures: sm_30 (Kepler) through sm_90 (Hopper)")
 
     find_package(CUDAToolkit ${MINIMUM_CUDA_VERSION} REQUIRED)
 
     message(STATUS "[CUDA] Found CUDA: ${CUDAToolkit_VERSION}")
     message(STATUS "[CUDA] CUDA Runtime: ${CUDAToolkit_LIBRARY}")
 
-    # GPU Architectures: Kepler (30) to Hopper (90)
-    set(CMAKE_CUDA_ARCHITECTURES 30 50 60 70 75 80 86 89 90
+    # nvcc only knows about architectures that shipped with its toolkit. The
+    # full sm_30..sm_90 list assumes CUDA >= 11.8; on older toolkits we have
+    # to clamp before nvcc rejects the unknown -gencode arguments.
+    #
+    #   Toolkit | Highest supported arch
+    #   --------+-----------------------
+    #   10.x    | sm_75 (Turing)
+    #   11.0..1 | sm_80 (Ampere A100)
+    #   11.2..7 | sm_86 (Ampere consumer)
+    #   11.8+   | sm_89 / sm_90 (Ada Lovelace / Hopper)
+    if(CUDAToolkit_VERSION_MAJOR LESS 11)
+        set(_OMNI_CUDA_ARCHS 30 50 60 70 75)
+    elseif(CUDAToolkit_VERSION_MAJOR EQUAL 11 AND CUDAToolkit_VERSION_MINOR LESS 2)
+        set(_OMNI_CUDA_ARCHS 30 50 60 70 75 80)
+    elseif(CUDAToolkit_VERSION_MAJOR EQUAL 11 AND CUDAToolkit_VERSION_MINOR LESS 8)
+        set(_OMNI_CUDA_ARCHS 50 60 70 75 80 86)
+    else()
+        set(_OMNI_CUDA_ARCHS 50 60 70 75 80 86 89 90)
+    endif()
+    set(CMAKE_CUDA_ARCHITECTURES ${_OMNI_CUDA_ARCHS}
         CACHE STRING "CUDA GPU architectures to compile for" FORCE)
 
     message(STATUS "[CUDA] Compiling for architectures: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -156,9 +178,15 @@ set_target_properties(imgui_node_editor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set(ENABLE_TURBOQUANT ON CACHE BOOL "Enable TurboQuant Plus" FORCE)
 
 if(ENABLE_TURBOQUANT)
-    message(STATUS "[TurboQuant] Enabled with CUDA ${CUDAToolkit_VERSION}")
+    if(OMNI_HAVE_CUDA)
+        message(STATUS "[TurboQuant] Enabled with CUDA ${CUDAToolkit_VERSION}")
+    else()
+        message(STATUS "[TurboQuant] Enabled (host-only, no CUDA toolchain)")
+    endif()
     add_compile_definitions(TURBOQUANT_PLUS_ENABLED)
-    add_compile_definitions(CUDA_11_4_MINIMUM)
+    if(OMNI_HAVE_CUDA AND NOT CUDAToolkit_VERSION_MAJOR LESS 11)
+        add_compile_definitions(CUDA_11_4_MINIMUM)
+    endif()
 endif()
 
 # ============================================================
@@ -167,9 +195,23 @@ endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/llama.cpp/CMakeLists.txt")
     message(STATUS "[llama.cpp] Found, integrating...")
-    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+
+    # Modern llama.cpp's GGML_CUDA backend assumes CUDA >= 11. On older
+    # toolkits (e.g. CUDA 10.1 hosts targeting Kepler) we have to either
+    # build llama.cpp without its CUDA backend or pin an older llama.cpp
+    # commit. We default to the safe choice (CUDA backend off) and emit a
+    # status line so the operator knows what happened.
+    if(OMNI_HAVE_CUDA AND CUDAToolkit_VERSION_MAJOR LESS 11)
+        message(STATUS "[llama.cpp] CUDA ${CUDAToolkit_VERSION} < 11 detected; "
+                       "forcing GGML_CUDA=OFF. To use the CUDA backend on "
+                       "this host, pin vendor/llama.cpp to a commit from "
+                       "around mid-2023 (e.g. b1429) and re-enable manually.")
+        set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    else()
+        set(GGML_CUDA ${OMNI_HAVE_CUDA} CACHE BOOL "" FORCE)
+    endif()
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-    set(GGML_CUDA_F16 ON CACHE BOOL "" FORCE)
+    set(GGML_CUDA_F16 ${GGML_CUDA} CACHE BOOL "" FORCE)
     add_subdirectory(vendor/llama.cpp)
 else()
     message(WARNING "[llama.cpp] Not found in vendor/. Skipping integration.")
@@ -211,8 +253,22 @@ if(OMNI_HAVE_CUDA)
     target_link_libraries(OmniCore PUBLIC
         CUDA::cudart
         CUDA::cublas
-        CUDA::cublasLt
     )
+    # cuBLASLt only ships in CUDA >= 10.1 as a separate component and is
+    # most reliably present on CUDA >= 11. Keep it gated so CUDA 10.x
+    # builds don't fail to find the import target.
+    if(NOT CUDAToolkit_VERSION_MAJOR LESS 11)
+        target_link_libraries(OmniCore PUBLIC CUDA::cublasLt)
+    endif()
+
+    # nvcc on CUDA 10.x tops out at C++14 (with experimental C++17 on 10.2).
+    # The host TUs in OmniCore continue to compile as C++20 (set above) but
+    # the .cu kernel file has to be down-leveled to keep nvcc happy.
+    if(CUDAToolkit_VERSION_MAJOR LESS 11)
+        set_source_files_properties(src/turbo_quant_kernels.cu PROPERTIES
+            CUDA_STANDARD 14
+            CUDA_STANDARD_REQUIRED ON)
+    endif()
 endif()
 
 if(Vulkan_FOUND)
@@ -221,11 +277,22 @@ endif()
 
 target_compile_definitions(OmniCore PRIVATE
     TURBOQUANT_PLUS_ENABLED
-    CUDA_MINIMUM_VERSION=11400
-    SUPPORT_CUDA_11_4=1
     SUPPORT_VULKAN_AMD=1
     SUPPORT_VULKAN_INTEL=1
 )
+if(OMNI_HAVE_CUDA)
+    # CUDA_MINIMUM_VERSION encodes major*1000 + minor*10 (matches the
+    # CUDA_VERSION macro nvcc emits) so feature gates can compare against
+    # the active toolkit at compile time.
+    math(EXPR _OMNI_CUDA_VERSION_INT
+         "${CUDAToolkit_VERSION_MAJOR} * 1000 + ${CUDAToolkit_VERSION_MINOR} * 10")
+    target_compile_definitions(OmniCore PRIVATE
+        CUDA_MINIMUM_VERSION=${_OMNI_CUDA_VERSION_INT}
+    )
+    if(NOT CUDAToolkit_VERSION_MAJOR LESS 11)
+        target_compile_definitions(OmniCore PRIVATE SUPPORT_CUDA_11_4=1)
+    endif()
+endif()
 
 # ============================================================
 # MAIN APPLICATION
