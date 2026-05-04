@@ -256,9 +256,15 @@ bool MemoryManager::DisableDiskSwap() {
 }
 
 bool MemoryManager::CanFitModel(uint64_t model_size, int context_length) const {
-    uint64_t kv_cache_size = EstimateKVCacheSize(32, 4096, context_length);
-    uint64_t total_required = model_size + kv_cache_size;
+    const uint64_t kv_cache_size = EstimateKVCacheSize(32, 4096, context_length);
+    const uint64_t total_required = model_size + kv_cache_size;
 
+    // Guard against unsigned underflow: if the reserved buffer is larger than
+    // total VRAM (e.g. CPU-only build with vram_total_bytes_ == 0), the model
+    // cannot fit at all rather than fitting into an enormous virtual budget.
+    if (total_vram_bytes_ <= reserved_buffer_bytes_) {
+        return false;
+    }
     return total_required <= (total_vram_bytes_ - reserved_buffer_bytes_);
 }
 
@@ -328,4 +334,75 @@ bool MemoryManager::CreateSwapDirectory() {
 
 void MemoryManager::UpdateAvailableMemory() {
     QueryHardwareMemory();
+}
+// ============================================================
+// EXTRA TELEMETRY / TUNING HOOKS
+// Wired to the GUI panels in src/gui_memory_buffer_panel.cpp; the
+// implementations are intentionally minimal but consistent with the rest of
+// the manager's bookkeeping.
+// ============================================================
+
+float MemoryManager::GetVRAMUtilizationPercent() const {
+    if (total_vram_bytes_ == 0) return 0.0f;
+    return static_cast<float>(allocated_vram_bytes_) /
+           static_cast<float>(total_vram_bytes_) * 100.0f;
+}
+
+TPSMetrics MemoryManager::GetTPSMetrics() const {
+    TPSMetrics metrics;
+    metrics.current_tps = last_tps_;
+    metrics.average_tps = average_tps_;
+
+    // Treat the swap+offload share as memory overhead — the higher this is,
+    // the further we are from a hot-path fully-resident config.
+    const uint64_t overhead =
+        allocated_ram_bytes_ + disk_swap_used_bytes_;
+    const uint64_t total = allocated_vram_bytes_ + overhead;
+    if (total > 0) {
+        metrics.memory_overhead_percent =
+            static_cast<float>(overhead) / static_cast<float>(total) * 100.0f;
+    }
+    metrics.is_optimal =
+        metrics.memory_overhead_percent < 5.0f && last_tps_ > 0.0f;
+    return metrics;
+}
+
+json MemoryManager::GetMemoryHealthReport() const {
+    json report;
+    report["vram_total_bytes"] = total_vram_bytes_;
+    report["vram_allocated_bytes"] = allocated_vram_bytes_;
+    report["vram_reserved_buffer_bytes"] = reserved_buffer_bytes_;
+    report["vram_utilization_percent"] = GetVRAMUtilizationPercent();
+    report["ram_allocated_bytes"] = allocated_ram_bytes_;
+    report["disk_swap_used_bytes"] = disk_swap_used_bytes_;
+    report["allocation_count"] = vram_allocations_.size();
+    report["overflow_threshold"] = policy_.utilization_threshold;
+    report["optimize_for_throughput"] = policy_.optimize_for_throughput;
+    return report;
+}
+
+bool MemoryManager::SetDeterministicBuffer(uint64_t reserved_bytes) {
+    if (reserved_bytes >= total_vram_bytes_) {
+        return false;
+    }
+    reserved_buffer_bytes_ = reserved_bytes;
+    policy_.vram_buffer_size = reserved_bytes;
+    UpdateAvailableMemory();
+    return true;
+}
+
+void MemoryManager::OptimizeForThroughput() {
+    policy_.optimize_for_throughput = true;
+    policy_.force_pinned_memory = true;
+}
+
+void MemoryManager::RecordTokenThroughput(float tokens_per_second) {
+    last_tps_ = tokens_per_second;
+    if (tps_sample_count_ == 0) {
+        average_tps_ = tokens_per_second;
+    } else {
+        // Exponential moving average with a smoothing factor of 0.1.
+        average_tps_ = 0.9f * average_tps_ + 0.1f * tokens_per_second;
+    }
+    ++tps_sample_count_;
 }

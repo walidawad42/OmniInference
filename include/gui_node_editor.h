@@ -1,7 +1,7 @@
 #pragma once
 
 #include "omni_engine.h"
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <imgui_node_editor.h>
 #include <vector>
 #include <map>
@@ -52,9 +52,12 @@ private:
     ed::EditorContext* editor_context_ = nullptr;
     std::vector<NodeData> nodes_;
     std::vector<LinkData> links_;
-    ed::NodeId next_node_id_;
-    ed::LinkId next_link_id_;
-    ed::PinId next_pin_id_;
+    // Plain counters that get cast into the strongly-typed `ed::NodeId` /
+    // `ed::LinkId` / `ed::PinId` wrappers when they're handed to the node
+    // editor. The wrappers themselves don't expose `operator++`.
+    uintptr_t next_node_id_ = 1;
+    uintptr_t next_link_id_ = 1;
+    uintptr_t next_pin_id_ = 1;
 
     // Rendering
     void RenderNode(NodeData& node);

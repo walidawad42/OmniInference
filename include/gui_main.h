@@ -3,7 +3,7 @@
 #include "omni_engine.h"
 #include "gui_node_editor.h"
 #include <SDL2/SDL.h>
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <atomic>
 #include <mutex>
 #include <string>

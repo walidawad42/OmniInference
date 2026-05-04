@@ -2,7 +2,8 @@
 
 #include <string>
 #include <vector>
-#include <json.hpp>
+#include <nlohmann/json.hpp>
+using nlohmann::json;
 #include <curl/curl.h>
 
 using json = nlohmann::json;

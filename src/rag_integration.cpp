@@ -257,3 +257,9 @@ std::vector<DocumentSource> RAGIntegration::GetAllSources() {
 
     return sources;
 }
+bool RAGIntegration::IsServerRunning() {
+    // Returns true if either of the two backing servers is currently marked
+    // running. We do not poll an HTTP endpoint here so that callers (the GUI
+    // panels) can render at frame-rate without blocking.
+    return ultrarag_running_ || minicpm_running_;
+}

@@ -5,7 +5,7 @@
 #include "dify_integration.h"
 #include "rag_integration.h"
 #include "minicpm_integration.h"
-#include <imgui.h>
+#include "gui_imgui_compat.h"
 #include <string>
 #include <vector>
 
