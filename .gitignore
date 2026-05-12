@@ -1,0 +1,56 @@
+# Build artifacts
+build/
+dist/
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+
+# CMake
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.cmake
+Makefile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.code-workspace
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Models and data (use Git LFS)
+*.gguf
+*.bin
+*.pt
+models/
+data/
+
+# User configs
+omni_config.json.local
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+# Vendored third-party sources fetched on demand by helper scripts (e.g.
+# scripts/setup_llama_cpp_kepler.sh). Not tracked because we pin via the
+# script rather than via a submodule.
+vendor/

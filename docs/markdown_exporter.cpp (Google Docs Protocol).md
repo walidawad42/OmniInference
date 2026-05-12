@@ -1,0 +1,1 @@
+This file ensures the "Robotics Equations" are strictly wrapped for zero-error transfer. It uses a heuristic to detect equations (e.g., lines starting with Equation:, containing =, or standard LaTeX commands).
