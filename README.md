@@ -1,6 +1,12 @@
 # 🚀 OmniInference v2.0.0
 
-**Production-Ready LLM/MLLM Inference Engine with TurboQuant Plus Native Integration**
+**Local OpenAI- and Anthropic-compatible API gateway, with optional Kepler-era CUDA acceleration via a pinned llama.cpp.**
+
+Drop-in `http://localhost:8080` for any tool that already speaks the
+OpenAI or Anthropic API (Aider, Cline, Continue.dev, Claude Code, the
+official `openai` / `anthropic` SDKs, LangChain, …). Streaming, tool
+calling, image upload, bearer auth, and a 44-assertion mock-mode
+test suite are all included.
 
 [![GitHub Release](https://img.shields.io/github/v/release/walidawad42/OmniInference?style=flat-square)](https://github.com/walidawad42/OmniInference/releases)
 [![Build Status](https://img.shields.io/github/workflow/status/walidawad42/OmniInference/Build?style=flat-square)](https://github.com/walidawad42/OmniInference/actions)
@@ -11,18 +17,39 @@
 
 ---
 
-## 📊 Status: PRODUCTION READY ✅
+## 📊 What's shipped
 
-OmniInference is **production-ready** and optimized for:
-- ✅ **Legacy GPUs** (Kepler K5100M from 2012)
-- ✅ **Modern GPUs** (RTX 40xx, H100 Hopper)
-- ✅ **All Platforms** (Windows 10/11, Pop!_OS, Ubuntu)
-- ✅ **CUDA 11.4+** (R470+ driver support)
-- ✅ **CUDA 10.1 fallback** for Kepler hosts (see below)
+- ✅ **OpenAI-compatible** server: `/v1/chat/completions` (streaming + tools),
+  `/v1/completions`, `/v1/embeddings`, `/v1/models`.
+- ✅ **Anthropic-compatible** server: `/v1/messages` (streaming + `tool_use`
+  blocks), shared with the OpenAI surface so registered tools work for
+  both clients.
+- ✅ **Image input**: `image_url` / `image` content blocks decoded
+  server-side (`stb_image`: PNG / JPEG / BMP / GIF / TGA, base64 /
+  raw data-URIs). HTTP(S) URL fetching is intentionally disabled.
+- ✅ **Mock mode** (`--mock`) — exercises the full HTTP surface with no
+  GGUF loaded. Used by the test suite.
+- ✅ **Build profile** for **CUDA 10.1 + Kepler sm_30** (Quadro K5100M
+  and friends) — see below.
+- ✅ **Builds CPU-only** out of the box (no nvcc required) on Ubuntu /
+  Pop!_OS / WSL2.
+
+### Model compatibility
+
+Text-only inference on the K5100M GPU (via `OMNI_LLAMACPP_KEPLER_OVERRIDE`
+and the pinned `b1500` llama.cpp) covers the late-2023 model era —
+Llama 2, Mistral 7B, Phi-2, CodeLlama, Yi-6B, the original Qwen 1, and
+LLaVA-1.5 / 1.6 / BakLLaVA for vision. Architectures that landed in
+llama.cpp **after** Nov 2023 (Llama 3, Phi-3, Gemma, Qwen 1.5+, MiniCPM-V
+series, MiniCPM-O, LFM2 / LFM2-VL, DeepSeek V2/V3, etc.) are **not**
+buildable for `sm_30` because NVIDIA dropped Kepler in CUDA 11.0; for
+those you need a Pascal-or-newer card.
 
 ---
 
 ## 🛠️ Building from Source
+
+### Linux / WSL2 / macOS
 
 ```bash
 cmake -S . -B build && cmake --build build -j
@@ -32,6 +59,68 @@ The build auto-detects CUDA via `check_language(CUDA)`. With no nvcc on the
 host the project falls back to a CPU/Vulkan-only configuration; `.cu`
 sources, `CUDA::cudart`, `CUDA::cublas`, and `CUDA::cublasLt` are all
 skipped.
+
+### Windows 10 / 11 (64-bit) — native MSVC
+
+The CMakeLists has been Windows-aware since the initial port (you'll see
+`if(WIN32)` blocks setting `CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"`,
+gating DXGI / D3D11, etc.), so a native Visual Studio build is the
+expected workflow on Windows.
+
+**Prereqs (workstation install once):**
+
+- **Visual Studio 2017** (toolset **v141**) — required if you intend to
+  use **CUDA 10.1** for the Kepler GPU path; nvcc 10.1 is only reliably
+  compatible with the v141 host compiler. VS 2019/2022 are fine for
+  CPU-only builds.
+- **CUDA Toolkit 10.1** (Kepler hosts) **or** CUDA 11.4+ (Pascal-or-newer
+  hosts). Skip entirely for CPU-only.
+- **CMake** ≥ 3.18.
+- **Git for Windows** (provides Git Bash, useful for the round-trip test
+  shell script).
+
+**CPU-only build (no GPU; fastest sanity check):**
+
+```powershell
+cmake -S . -B build -G "Visual Studio 15 2017" -A x64
+cmake --build build --config Release -j
+.\build\Release\OmniServer.exe --mock --port 8080
+```
+
+The mock server exposes the full OpenAI + Anthropic API surface without
+loading any model — handy for verifying the install before you wire up
+GGUFs.
+
+**GPU build (Quadro K5100M / Kepler / CUDA 10.1):**
+
+```powershell
+# 1. Pin vendor/llama.cpp to a Kepler-compatible tag.
+.\scripts\setup_llama_cpp_kepler.ps1
+
+# 2. Configure with the v141 toolset + CUDA 10.1, opt in to the Kepler override.
+cmake -S . -B build -G "Visual Studio 15 2017" -A x64 -T v141,cuda=10.1 `
+      -DOMNI_LLAMACPP_KEPLER_OVERRIDE=ON
+
+# 3. Build (Release config; Debug also works but is much slower at runtime).
+cmake --build build --config Release -j
+
+# 4. Run.
+.\build\Release\OmniServer.exe --port 8080
+```
+
+**Notes specific to Windows + CUDA 10.1:**
+
+- The `-G "Visual Studio 15 2017"` selector is for **VS 2017**. For VS
+  2019 / 2022 hosts that still have v141 installed, swap to
+  `-G "Visual Studio 16 2019"` or `-G "Visual Studio 17 2022"` but **keep**
+  `-T v141,cuda=10.1` — that's what tells MSBuild to use the v141 host
+  compiler nvcc 10.1 actually supports.
+- The bash script `scripts/setup_llama_cpp_kepler.sh` works under Git
+  Bash on Windows. The PowerShell port `scripts/setup_llama_cpp_kepler.ps1`
+  does the same thing without needing Git Bash.
+- The round-trip test suite (`tests/api/run_tests.sh`) is bash-only and
+  needs Git Bash (or WSL). On a stock cmd.exe / PowerShell shell, run
+  the curl smoke tests manually against `--mock` instead.
 
 ### Kepler / CUDA 10.1 build profile
 
@@ -116,9 +205,9 @@ shared bearer-token auth (`--api-key sk-omni-local`). Full details:
   Claude Code / Aider (Anthropic mode) config snippets.
 
 A round-trip integration test against a live `--mock` server lives at
-[`tests/api/run_tests.sh`](tests/api/run_tests.sh) and exercises 37
+[`tests/api/run_tests.sh`](tests/api/run_tests.sh) and exercises 44
 assertions covering streaming, tools, embeddings 501, CORS preflight,
-and bearer auth.
+bearer auth, and base64 image-decode round-trip on both API surfaces.
 
 ---
 
