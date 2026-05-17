@@ -1,0 +1,428 @@
+cmake_minimum_required(VERSION 3.16)
+project(OmniInference VERSION 2.0.0 LANGUAGES C CXX CUDA)
+
+# ============================================================
+# OMNEINFERENCE v2.0.0 - UNIVERSAL BUILD SYSTEM
+# ============================================================
+# Supported Configurations:
+# ├─ CUDA: 10.1 → Latest (auto-detection)
+# ├─ SM Architectures: SM_30 (Kepler) → SM_90 (Hopper)
+# ├─ Backends: CUDA, Vulkan, Intel Arc
+# ├─ OS: Windows 10/11, Pop!_OS, Ubuntu 20.04+
+# └─ Build: Multi-platform CMake
+# ============================================================
+
+message(STATUS "╔════════════════════════════════════════════════════════════╗")
+message(STATUS "║ OmniInference v2.0.0 - Universal Build Configuration      ║")
+message(STATUS "║ Multi-CUDA (10.1→Latest) | Multi-Platform | Multi-Backend ║")
+message(STATUS "╚════════════════════════════════════════════════════════════╝")
+
+# ============================================================
+# BUILD OPTIONS - User Configurable
+# ============================================================
+
+option(BUILD_CUDA "Build with CUDA support" ON)
+option(BUILD_VULKAN "Build with Vulkan support" ON)
+option(BUILD_INTEL "Build with Intel Arc support" OFF)
+option(ENABLE_LEGACY_KEPLER "Enable Kepler SM_30 support (requires CUDA 10.x)" OFF)
+option(BUILD_TESTING "Build test suite" ON)
+option(BUILD_DOCUMENTATION "Build documentation" OFF)
+
+# ============================================================
+# PLATFORM DETECTION
+# ============================================================
+
+message(STATUS "[Platform] Detecting OS and configuration...")
+
+if(WIN32)
+    set(OMNEINFERENCE_PLATFORM "Windows")
+    message(STATUS "  ✓ Platform: Windows ${CMAKE_SYSTEM_VERSION}")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(STATUS "  ✓ Architecture: x64")
+    endif()
+elseif(APPLE)
+    message(FATAL_ERROR "macOS not supported - CUDA/Vulkan not available")
+elseif(UNIX AND NOT APPLE)
+    set(OMNEINFERENCE_PLATFORM "Linux")
+    message(STATUS "  ✓ Platform: Linux")
+    
+    # Detect Linux distribution
+    if(EXISTS "/etc/os-release")
+        file(READ "/etc/os-release" OS_RELEASE)
+        if(OS_RELEASE MATCHES "ID=pop")
+            message(STATUS "  ✓ Distribution: Pop!_OS")
+        elseif(OS_RELEASE MATCHES "ID=ubuntu")
+            message(STATUS "  ✓ Distribution: Ubuntu")
+        endif()
+    endif()
+else()
+    message(FATAL_ERROR "Unknown platform - not supported")
+endif()
+
+# ============================================================
+# C++ STANDARD & COMPILER CONFIGURATION
+# ============================================================
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+message(STATUS "[Compiler] C++ Standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+
+# Platform-specific compiler flags
+if(MSVC)
+    # Windows MSVC
+    add_compile_options(/W4 /permissive- /fp:fast)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    message(STATUS "  ✓ MSVC flags configured")
+else()
+    # GCC/Clang
+    add_compile_options(-Wall -Wextra -ffast-math -fPIC)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
+            message(STATUS "  ✓ GCC 8+ detected - applying compatibility patches")
+            add_compile_options(-Wno-error=narrowing -fno-strict-aliasing)
+        endif()
+    endif()
+endif()
+
+# ============================================================
+# CUDA CONFIGURATION - Multi-Version Support
+# ============================================================
+
+message(STATUS "[CUDA] Configuring CUDA support...")
+
+if(BUILD_CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    
+    message(STATUS "  ✓ CUDA Toolkit Found: ${CUDAToolkit_VERSION}")
+    message(STATUS "  ✓ CUDA Toolkit Path: ${CUDAToolkit_BIN_DIR}")
+    
+    # Parse CUDA version
+    string(REGEX MATCH "^[0-9]+\\.[0-9]+" CUDA_VERSION_MAJOR_MINOR "${CUDAToolkit_VERSION}")
+    message(STATUS "  ✓ CUDA Version: ${CUDA_VERSION_MAJOR_MINOR}")
+    
+    # ============================================================
+    # GPU ARCHITECTURE SUPPORT MATRIX
+    # ============================================================
+    
+    if(ENABLE_LEGACY_KEPLER)
+        if(CUDA_VERSION_MAJOR_MINOR VERSION_LESS 11.0)
+            message(STATUS "  ✓ Kepler (SM_30) support ENABLED")
+            set(CMAKE_CUDA_ARCHITECTURES 30 50 60 70 75 80 86 89 90)
+            add_compile_definitions(KEPLER_SM30_SUPPORT=1)
+        else()
+            message(WARNING "  ⚠ Kepler SM_30 requires CUDA 10.x - will skip")
+            set(CMAKE_CUDA_ARCHITECTURES 50 60 70 75 80 86 89 90)
+        endif()
+    else()
+        message(STATUS "  ✓ GPU Architectures: Maxwell+ (SM_50 → SM_90)")
+        if(CUDA_VERSION_MAJOR_MINOR VERSION_GREATER_EQUAL 12.0)
+            set(CMAKE_CUDA_ARCHITECTURES 50 60 70 75 80 86 89 90)
+        elseif(CUDA_VERSION_MAJOR_MINOR VERSION_GREATER_EQUAL 11.0)
+            set(CMAKE_CUDA_ARCHITECTURES 50 60 70 75 80 86)
+        else()
+            # CUDA 10.x
+            set(CMAKE_CUDA_ARCHITECTURES 50 60 70 75)
+        endif()
+    endif()
+    
+    message(STATUS "  ✓ Target GPU Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+    
+    # ============================================================
+    # CUDA COMPILER FLAGS BY VERSION
+    # ============================================================
+    
+    if(CUDA_VERSION_MAJOR_MINOR VERSION_LESS 11.0)
+        # CUDA 10.x specific
+        message(STATUS "  ✓ CUDA 10.x detected - legacy support mode")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -O3")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --maxrregcount=128")
+        add_compile_definitions(CUDA_10X_LEGACY=1)
+        
+    elseif(CUDA_VERSION_MAJOR_MINOR VERSION_LESS 12.0)
+        # CUDA 11.x specific
+        message(STATUS "  ✓ CUDA 11.x detected - standard mode")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -O3 -dlcm=cg")
+        
+    else()
+        # CUDA 12.x+ (latest)
+        message(STATUS "  ✓ CUDA 12.x+ detected - optimized mode")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -O3 -dlcm=cg")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math")
+        add_compile_definitions(CUDA_12_PLUS=1)
+    endif()
+    
+    # General CUDA flags
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler /fp:fast")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -O3")
+    
+    message(STATUS "  ✓ CUDA Flags: ${CMAKE_CUDA_FLAGS}")
+    
+else()
+    message(STATUS "  ✗ CUDA support disabled (BUILD_CUDA=OFF)")
+endif()
+
+# ============================================================
+# VULKAN SUPPORT (For AMD, Intel Arc)
+# ============================================================
+
+message(STATUS "[Vulkan] Configuring Vulkan backend...")
+
+if(BUILD_VULKAN)
+    find_package(Vulkan REQUIRED)
+    message(STATUS "  ✓ Vulkan Found: ${Vulkan_VERSION}")
+    message(STATUS "  ✓ Vulkan Include: ${Vulkan_INCLUDE_DIR}")
+    add_compile_definitions(VULKAN_ENABLED=1)
+else()
+    message(STATUS "  ✗ Vulkan support disabled")
+endif()
+
+# ============================================================
+# DEPENDENCIES
+# ============================================================
+
+message(STATUS "[Dependencies] Finding required packages...")
+
+find_package(SDL2 REQUIRED)
+message(STATUS "  ✓ SDL2 found")
+
+find_package(OpenGL REQUIRED)
+message(STATUS "  ✓ OpenGL found")
+
+find_package(CURL REQUIRED)
+message(STATUS "  ✓ libcurl found")
+
+# ============================================================
+# JSON LIBRARY (Header-only)
+# ============================================================
+
+include(FetchContent)
+
+FetchContent_Declare(json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
+    DOWNLOAD_NO_PROGRESS TRUE
+)
+
+FetchContent_MakeAvailable(json)
+message(STATUS "  ✓ nlohmann/json fetched")
+
+# ============================================================
+# IMGUI (For GUI)
+# ============================================================
+
+FetchContent_Declare(ImGui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.89.9-docking
+)
+
+FetchContent_MakeAvailable(ImGui)
+message(STATUS "  ✓ ImGui fetched")
+
+# ============================================================
+# CORE ENGINE LIBRARY
+# ============================================================
+
+message(STATUS "[Core] Building OmniCore library...")
+
+file(GLOB_RECURSE OMNEINFERENCE_SOURCES
+    src/omni_engine.cpp
+    src/memory_manager.cpp
+    src/turboquant_pipeline.cpp
+    src/tool_calling_interface.cpp
+    src/omni_server.cpp
+    src/monitoring.cpp
+)
+
+file(GLOB_RECURSE OMNEINFERENCE_CUDA_SOURCES
+    src/*.cu
+)
+
+add_library(OmniCore STATIC
+    ${OMNEINFERENCE_SOURCES}
+    ${OMNEINFERENCE_CUDA_SOURCES}
+)
+
+target_include_directories(OmniCore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${nlohmann_json_SOURCE_DIR}/include
+    ${SDL2_INCLUDE_DIRS}
+)
+
+# Link CUDA
+if(BUILD_CUDA)
+    target_link_libraries(OmniCore PUBLIC
+        CUDA::cudart
+        CUDA::cublas
+        CUDA::curand
+    )
+endif()
+
+# Link Vulkan
+if(BUILD_VULKAN)
+    target_link_libraries(OmniCore PUBLIC Vulkan::Vulkan)
+endif()
+
+# Link other dependencies
+target_link_libraries(OmniCore PUBLIC
+    ${CURL_LIBRARIES}
+    ${OPENGL_LIBRARIES}
+)
+
+# Platform-specific linking
+if(WIN32)
+    target_link_libraries(OmniCore PRIVATE ws2_32 winsock2)
+elseif(UNIX)
+    target_link_libraries(OmniCore PRIVATE pthread)
+endif()
+
+message(STATUS "  ✓ OmniCore library configured")
+
+# ============================================================
+# GUI APPLICATION
+# ============================================================
+
+message(STATUS "[GUI] Building OmniInference application...")
+
+file(GLOB_RECURSE GUI_SOURCES
+    src/gui_*.cpp
+    src/main_visual.cpp
+)
+
+add_executable(OmniInference
+    ${GUI_SOURCES}
+    ${ImGui_SOURCE_DIR}/imgui.cpp
+    ${ImGui_SOURCE_DIR}/imgui_draw.cpp
+    ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
+    ${ImGui_SOURCE_DIR}/imgui_tables.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(OmniInference PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${ImGui_SOURCE_DIR}
+    ${ImGui_SOURCE_DIR}/backends
+    ${SDL2_INCLUDE_DIRS}
+)
+
+target_link_libraries(OmniInference PRIVATE
+    OmniCore
+    ${SDL2_LIBRARIES}
+    ${OPENGL_LIBRARIES}
+)
+
+# Platform-specific GUI configuration
+if(WIN32)
+    target_link_libraries(OmniInference PRIVATE opengl32 gdi32)
+    set_target_properties(OmniInference PROPERTIES WIN32_EXECUTABLE ON)
+elseif(UNIX)
+    target_link_libraries(OmniInference PRIVATE GL)
+endif()
+
+message(STATUS "  ✓ OmniInference GUI executable configured")
+
+# ============================================================
+# CLI APPLICATION (Optional)
+# ============================================================
+
+message(STATUS "[CLI] Building OmniInference-CLI...")
+
+add_executable(OmniInference-CLI
+    src/main_cli.cpp
+)
+
+target_link_libraries(OmniInference-CLI PRIVATE OmniCore)
+message(STATUS "  ✓ OmniInference-CLI configured")
+
+# ============================================================
+# TESTING (Optional)
+# ============================================================
+
+if(BUILD_TESTING)
+    message(STATUS "[Tests] Configuring test suite...")
+    
+    enable_testing()
+    
+    # Unit tests
+    add_executable(test_memory tests/test_memory.cpp)
+    target_link_libraries(test_memory PRIVATE OmniCore)
+    add_test(NAME MemoryTests COMMAND test_memory)
+    
+    # Quantization tests
+    add_executable(test_quantization tests/test_quantization.cpp)
+    target_link_libraries(test_quantization PRIVATE OmniCore)
+    add_test(NAME QuantizationTests COMMAND test_quantization)
+    
+    # Benchmark
+    add_executable(benchmark_tps tests/benchmark_tps.cpp)
+    target_link_libraries(benchmark_tps PRIVATE OmniCore)
+    
+    message(STATUS "  ✓ Test suite configured")
+endif()
+
+# ============================================================
+# INSTALLATION
+# ============================================================
+
+install(TARGETS OmniInference OmniInference-CLI
+    RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY include/
+    DESTINATION include/omneinference
+)
+
+# ============================================================
+# BUILD SUMMARY
+# ============================================================
+
+message(STATUS "")
+message(STATUS "╔════════════════════════════════════════════════════════════╗")
+message(STATUS "║ BUILD CONFIGURATION SUMMARY                               ║")
+message(STATUS "╠════════════════════════════════════════════════════════════╣")
+message(STATUS "║                                                            ║")
+message(STATUS "║ Platform: ${OMNEINFERENCE_PLATFORM}")
+message(STATUS "║ C++ Standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "║ Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "║                                                            ║")
+if(BUILD_CUDA)
+    message(STATUS "║ CUDA Support: ✓ ENABLED")
+    message(STATUS "║   Version: ${CUDA_VERSION_MAJOR_MINOR}")
+    message(STATUS "║   Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+else()
+    message(STATUS "║ CUDA Support: ✗ DISABLED")
+endif()
+if(BUILD_VULKAN)
+    message(STATUS "║ Vulkan Support: ✓ ENABLED (AMD/Intel Arc)")
+else()
+    message(STATUS "║ Vulkan Support: ✗ DISABLED")
+endif()
+if(ENABLE_LEGACY_KEPLER)
+    message(STATUS "║ Legacy Kepler (SM_30): ✓ ENABLED")
+else()
+    message(STATUS "║ Legacy Kepler (SM_30): ✗ DISABLED")
+endif()
+if(BUILD_TESTING)
+    message(STATUS "║ Testing: ✓ ENABLED")
+else()
+    message(STATUS "║ Testing: ✗ DISABLED")
+endif()
+message(STATUS "║                                                            ║")
+message(STATUS "║ Targets:                                                   ║")
+message(STATUS "║   • OmniInference (GUI)                                    ║")
+message(STATUS "║   • OmniInference-CLI (Command-line)                       ║")
+message(STATUS "║   • OmniCore (Library)                                     ║")
+message(STATUS "║                                                            ║")
+message(STATUS "║ To build:                                                  ║")
+if(WIN32)
+    message(STATUS "║   cmake -B build -DCMAKE_BUILD_TYPE=Release")
+    message(STATUS "║   cmake --build build --config Release -j8")
+else()
+    message(STATUS "║   cmake -B build -DCMAKE_BUILD_TYPE=Release")
+    message(STATUS "║   make -C build -j$(nproc)")
+endif()
+message(STATUS "║                                                            ║")
+message(STATUS "╚════════════════════════════════════════════════════════════╝")
+message(STATUS "")

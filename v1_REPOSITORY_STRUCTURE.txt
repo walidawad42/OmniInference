@@ -1,0 +1,177 @@
+OmniInference/
+├── 📋 PROJECT METADATA
+│   ├── README.md (Main project overview)
+│   ├── PRODUCTION_GUIDE.md (2000+ lines - Full user manual)
+│   ├── FUTURE_ROADMAP_2027.md (Vision document)
+│   ├── LICENSE (MIT)
+│   ├── CONTRIBUTING.md
+│   └── CHANGELOG.md
+│
+├── 🛠️ BUILD SYSTEM
+│   ├── CMakeLists.txt (Main build configuration - CUDA 11.4+)
+│   ├── build.sh (Linux/Pop!_OS native build)
+│   ├── build.ps1 (Windows PowerShell build)
+│   ├── CMakePresets.json (Build presets)
+│   └── conan.txt (Dependency management)
+│
+├── 📂 INCLUDE (Public Headers)
+│   ├── omni_engine.h (Core inference engine)
+│   ├── memory_manager.h (Deterministic buffer + overflow)
+│   ├── turboquant_pipeline.h (TurboQuant Plus control)
+│   ├── tool_calling_interface.h (Function calling)
+│   ├── comfyui_integration.h (Image generation - EXPERIMENTS)
+│   ├── dify_integration.h (Workflow orchestration - EXPERIMENTS)
+│   ├── rag_integration.h (Document retrieval - EXPERIMENTS)
+│   ├── minicpm_integration.h (Multimodal - EXPERIMENTS)
+│   ├── omni_server.h (OpenAI API server)
+│   ├── monitoring.h (Performance metrics)
+│   ├── gui_visual_control.h (Main control panel)
+│   ├── gui_memory_buffer_panel.h (Memory management UI)
+│   ├── gui_integration_panel.h (Integration controls)
+│   ├── gui_turboquant_panel.h (Quantization UI)
+│   └── gui_monitoring_panel.h (Performance UI)
+│
+├── 📄 SOURCE (Implementation)
+│   ├── omni_engine.cpp
+│   ├── memory_manager.cpp
+│   ├── turboquant_pipeline.cpp
+│   ├── turbo_quant_kernels.cu (CUDA kernels)
+│   ├── tool_calling_interface.cpp
+│   ├── comfyui_integration.cpp (EXPERIMENTS ONLY)
+│   ├── dify_integration.cpp (EXPERIMENTS ONLY)
+│   ├── rag_integration.cpp (EXPERIMENTS ONLY)
+│   ├── minicpm_integration.cpp (EXPERIMENTS ONLY)
+│   ├── omni_server.cpp (Production API)
+│   ├── monitoring.cpp
+│   ├── gui_visual_control.cpp
+│   ├── gui_memory_buffer_panel.cpp
+│   ├── gui_integration_panel.cpp
+│   ├── gui_turboquant_panel.cpp
+│   ├── gui_monitoring_panel.cpp
+│   └── main_visual.cpp (GUI entry point)
+│
+├── 🔧 CUDA KERNELS
+│   ├── kernels/
+│   │   ├── polar_transform_sm30.cu (Kepler optimized)
+│   │   ├── quantize_sm30.cu (Kepler optimized)
+│   │   ├── qjl_correction_sm30.cu (Kepler optimized)
+│   │   ├── fused_attention.cu
+│   │   └── memory_coalescence.cu
+│   └── kernels/CMakeLists.txt
+│
+├── 📚 DOCUMENTATION
+│   ├── docs/
+│   │   ├── API_REFERENCE.md (OpenAI-compatible API)
+│   │   ├── ARCHITECTURE.md (System design)
+│   │   ├── PERFORMANCE_TUNING.md (Optimization guide)
+│   │   ├── TROUBLESHOOTING.md (Common issues)
+│   │   ├── CUDA_REQUIREMENTS.md (CUDA 11.4+ setup)
+│   │   ├── MEMORY_MANAGEMENT.md (Deterministic buffer)
+│   │   ├── TURBOQUANT_PLUS.md (Quantization details)
+│   │   ├── LEGACY_GPU_GUIDE.md (K5100M optimization)
+│   │   ├── INTEGRATION_GUIDE.md (Experiments - Docker)
+│   │   ├── GUI_MANUAL.md (Complete GUI walkthrough)
+│   │   ├── MODEL_COMPATIBILITY.md (Tested models)
+│   │   └── BENCHMARKS.md (Performance data)
+│   └── docs/images/ (Screenshots, diagrams)
+│
+├── 🧪 TESTING & BENCHMARKS
+│   ├── tests/
+│   │   ├── unit_tests.cpp
+│   │   ├── integration_tests.cpp
+│   │   ├── memory_tests.cpp
+│   │   ├── quantization_tests.cpp
+│   │   ├── benchmark_tps.cpp
+│   │   └── needle_in_haystack_test.cpp
+│   ├── benchmarks/
+│   │   ├── run_benchmarks.sh
+│   │   ├── generate_report.py
+│   │   └── models/ (Test models)
+│   └── CMakeLists.txt
+│
+├── 🐳 DEPLOYMENT & CI/CD
+│   ├── .github/
+│   │   ├── workflows/
+│   │   │   ├── build.yml (Linux + Windows)
+│   │   │   ├── test.yml (Automated testing)
+│   │   │   ├── release.yml (Release automation)
+│   │   │   └── docker.yml (Docker build)
+│   │   ├── ISSUE_TEMPLATE/
+│   │   │   ├── bug_report.md
+│   │   │   ├── feature_request.md
+│   │   │   └── performance_issue.md
+│   │   └── pull_request_template.md
+│   ├── Dockerfile (Testing/development)
+│   ├── docker-compose.yml (Full stack - EXPERIMENTS)
+│   ├── deploy.sh (Linux deployment)
+│   ├── deploy.ps1 (Windows deployment)
+│   └── k8s/ (Optional Kubernetes configs)
+│
+├── 📦 CONFIGS & SCRIPTS
+│   ├── configs/
+│   │   ├── omni_config.json (Default configuration)
+│   │   ├── models.json (Model registry)
+│   │   ├── presets.json (Preset configurations)
+│   │   └── profiles/ (GPU-specific profiles)
+│   │       ├── kepler_k5100m.json
+│   │       ├── maxwell_gtx1060.json
+│   │       ├── pascal_gtx1080.json
+│   │       ├── turing_rtx2080.json
+│   │       ├── ampere_rtx3090.json
+│   │       └── hopper_h100.json
+│   ├── scripts/
+│   │   ├── setup_env.sh (Environment setup)
+│   │   ├── download_models.sh (Model download)
+│   │   ├── verify_installation.sh
+│   │   ├── benchmark.sh
+│   │   ├── profile.sh (Thermal/performance)
+│   │   ├── cleanup.sh
+│   │   └── windows/ (PowerShell equivalents)
+│   └── templates/ (Project templates)
+│
+├── 📋 VENDOR & DEPENDENCIES
+│   ├── vendor/
+│   │   ├── llama.cpp/ (Git submodule)
+│   │   ├── turboquant_plus/ (Git submodule)
+│   │   ├── imgui/ (Git submodule)
+│   │   └── dependencies.txt
+│   └── vcpkg.json (C++ package manager)
+│
+├── 📊 MODELS & DATA
+│   ├── models/ (Git LFS - Large files)
+│   │   ├── quantized/
+│   │   │   ├── llama-2-7b-3bit.gguf
+│   │   │   ├── mistral-7b-3bit.gguf
+│   │   │   └── README.md
+│   │   ├── benchmark/
+│   │   │   └── test_models/
+│   │   └── .gitattributes
+│   └── data/ (Test/example data)
+│
+├── 🎨 WORKFLOWS & INTEGRATIONS
+│   ├── workflows/ (EXPERIMENTS ONLY - Docker required)
+│   │   ├── comfyui/
+│   │   │   ├── image_generation.json
+│   │   │   └── README.md
+│   │   ├── dify/
+│   │   │   ├── chatbot_workflow.json
+│   │   │   └── README.md
+│   │   └── rag/
+│   │       ├── document_qa.json
+│   │       └── README.md
+│   └── README.md (Integration notes)
+│
+├── 📱 DISTRIBUTIONS
+│   ├── releases/
+│   │   ├── OmniInference-Linux-x64.tar.gz
+│   │   ├── OmniInference-Windows-x64.zip
+│   │   └── checksums.txt
+│   └── installers/ (WIX, DEB packages)
+│
+└── 📖 ROOT LEVEL FILES
+    ├── .gitignore
+    ├── .gitattributes (LFS configuration)
+    ├── .github (CI/CD workflows)
+    ├── CODE_OF_CONDUCT.md
+    ├── SECURITY.md
+    └── ACKNOWLEDGMENTS.md
